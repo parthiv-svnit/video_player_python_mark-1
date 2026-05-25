@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MX Player - Desktop Edition</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <script src="qwebchannel.js"></script>
+
+    <style>
+        /* CRITICAL: Force body/html to be transparent to reveal VLC underneath */
+        html, body { font-family: 'Inter', sans-serif; background-color: transparent !important; color: #e0e0e0; margin: 0; overflow: hidden; }
+        
+        #app-container { background-color: #121212; transition: background-color 0.3s; }
+        #app-container.playing { background-color: transparent !important; }
+        #video-player-section, #video-container { background-color: transparent !important; }
+
+        .controls-bar { opacity: 1; visibility: visible; transition: opacity 0.3s ease-in-out, visibility 0.3s ease-in-out; will-change: opacity, visibility; }
+        .video-container.inactive .controls-bar, .video-container.locked .controls-bar { opacity: 0; visibility: hidden; }
+        .video-container.inactive { cursor: none; }
+        .video-container.locked.inactive { cursor: none; }
+        
+        .progress-bar { -webkit-appearance: none; appearance: none; width: 100%; height: 4px; background: rgba(255, 255, 255, 0.3); outline: none; transition: height 0.2s ease; cursor: pointer; }
+        .progress-bar:hover { height: 6px; }
+        .progress-bar::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 14px; height: 14px; background: #3b82f6; border-radius: 50%; cursor: pointer; }
+        
+        /* Removed backdrop-blur-sm and added will-change to FIX hover lag entirely */
+        .side-panel { transition: transform 0.2s ease-out; transform: translateX(100%); will-change: transform; }
+        .side-panel.open { transform: translateX(0); }
+        .track-button.active { background-color: #3b82f6; }
+        
+        #unlock-btn { position: absolute; top: 1.5rem; right: 1.5rem; background: rgba(0,0,0,0.7); color: white; width: 50px; height: 50px; border-radius: 50%; z-index: 9999; cursor: pointer; display: none; align-items: center; justify-content: center; opacity: 1; transition: opacity 0.3s ease-in-out; }
+        .video-container.locked #unlock-btn { display: flex; }
+        .video-container.locked.inactive #unlock-btn { opacity: 0; }
+
+        #app-container.is-fullscreen .bottom-controls { position: absolute; bottom: 5%; left: 50%; transform: translateX(-50%); width: 75%; max-width: 800px; background-color: rgba(0,0,0,0.6); border-radius: 12px; padding: 0.75rem 1.5rem; box-shadow: 0 0 20px rgba(0,0,0,0.5); }
+        #app-container.is-fullscreen .top-controls { opacity: 0; visibility: hidden; transition: none; }
+        #app-container.is-fullscreen .video-container.active .top-controls { opacity: 1; visibility: visible; transition: opacity 0.3s ease-in-out, visibility 0.3s ease-in-out; }
+        
+        .progress-bar-wrapper { position: relative; }
+        #progress-tooltip { position: absolute; bottom: 15px; background-color: rgba(0,0,0,0.7); color: white; padding: 4px 8px; border-radius: 4px; font-size: 12px; pointer-events: none; transform: translateX(-50%); display: none; }
+
+        .notification-center { pointer-events: none; transition: opacity 0.3s ease-in-out; }
+        
+        #audio-tracks-list, #subtitle-tracks-list { max-height: calc(100vh - 150px); overflow-y: auto; padding-right: 10px; }
+        #audio-tracks-list::-webkit-scrollbar, #subtitle-tracks-list::-webkit-scrollbar { width: 6px; }
+        #audio-tracks-list::-webkit-scrollbar-track, #subtitle-tracks-list::-webkit-scrollbar-track { background: rgba(255, 255, 255, 0.1); border-radius: 3px; }
+        #audio-tracks-list::-webkit-scrollbar-thumb, #subtitle-tracks-list::-webkit-scrollbar-thumb { background: #3b82f6; border-radius: 3px; }
+    </style>
+</head>
+<body class="overflow-hidden">
+
+    <div id="app-container" class="w-full h-screen flex flex-col items-center justify-center">
+        
+        <div id="local-file-section" class="text-center p-8">
+            <h1 class="text-5xl font-bold text-white mb-4"><span class="text-blue-500">MX</span> Player</h1>
+            <p class="text-gray-400 mb-8 text-lg">Your Personal Video Player</p>
+            <button id="open-file-btn" class="bg-blue-600 text-white px-8 py-4 rounded-full font-semibold hover:bg-blue-700 transition text-xl shadow-lg shadow-blue-500/20">
+                <i class="fas fa-folder-open mr-3"></i> Open Video(s)
+            </button>
+        </div>
+
+        <div id="video-player-section" class="w-full h-full hidden">
+            <div id="video-container" class="relative w-full h-full video-container">
+                <!-- Video/Audio tags completely removed. VLC operates beneath this container. -->
+                
+                <div id="track-notification" class="notification-center absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-black/70 text-white px-4 py-2 rounded-lg text-lg z-50 opacity-0"></div>
+                <div id="volume-notification" class="notification-center absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-black/70 text-white px-4 py-2 rounded-lg text-lg z-50 opacity-0 flex items-center space-x-2">
+                    <i id="volume-icon" class="fas fa-volume-up"></i>
+                    <span id="volume-level">100%</span>
+                </div>
+
+                <div class="controls-bar top-controls absolute top-0 left-0 right-0 p-4 bg-gradient-to-b from-black/60 to-transparent z-20">
+                    <div class="flex items-center justify-between w-full">
+                        <div class="flex items-center space-x-4 flex-1 min-w-0">
+                            <button id="back-btn" class="text-white text-xl px-2 flex-shrink-0 hover:text-blue-500 transition"><i class="fas fa-arrow-left"></i></button>
+                            <h2 id="video-title" class="text-white text-lg font-semibold truncate"></h2>
+                        </div>
+                        <div class="flex items-center space-x-5 flex-shrink-0">
+                            <button id="audio-tracks-btn" class="text-white text-xl hover:text-blue-500 transition"><i class="fas fa-music"></i></button>
+                            <button id="subtitle-tracks-btn" class="text-white text-xl hover:text-blue-500 transition"><i class="fas fa-closed-captioning"></i></button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="controls-bar bottom-controls w-full absolute bottom-0 left-0 p-4 bg-gradient-to-t from-black/80 to-transparent z-20">
+                    <div class="w-full mb-3 progress-bar-wrapper">
+                        <div id="progress-tooltip">00:00</div>
+                        <div class="flex justify-between items-center text-xs font-mono text-white px-1"><span id="current-time">00:00</span><span id="total-time" class="cursor-pointer">00:00</span></div>
+                        <input type="range" id="progress-bar" class="progress-bar" value="0" min="0" max="100">
+                    </div>
+                    <div class="flex items-center justify-between">
+                        <button id="lock-btn" class="text-white text-2xl px-2 hover:text-blue-500 transition"><i class="fas fa-lock"></i></button>
+                        <div class="flex items-center justify-center space-x-6">
+                            <button id="seek-backward-10-btn" class="text-white text-2xl hover:text-blue-500 transition"><i class="fas fa-undo"></i></button>
+                            <button id="prev-btn" class="text-white text-3xl hover:text-blue-500 transition"><i class="fas fa-backward-step"></i></button>
+                            <button id="play-pause-btn" class="text-white text-5xl hover:text-blue-500 transition"><i class="fas fa-play-circle"></i></button>
+                            <button id="next-btn" class="text-white text-3xl hover:text-blue-500 transition"><i class="fas fa-forward-step"></i></button>
+                            <button id="seek-forward-10-btn" class="text-white text-2xl hover:text-blue-500 transition"><i class="fas fa-redo"></i></button>
+                        </div>
+                        <button id="fullscreen-btn" class="text-white text-2xl px-2 hover:text-blue-500 transition"><i class="fas fa-expand-arrows-alt"></i></button>
+                    </div>
+                </div>
+                
+                <button id="unlock-btn" class="hover:bg-blue-600 transition"><i class="fas fa-lock-open fa-lg"></i></button>
+
+                <!-- Removed backdrop-blur-sm, changed bg to black/95 for performance -->
+                <div id="audio-tracks-panel" class="side-panel absolute top-0 right-0 h-full w-80 bg-black/95 z-30 p-4 flex flex-col">
+                    <h3 class="text-lg font-bold mb-4 flex-shrink-0">Audio Tracks</h3>
+                    <div id="audio-tracks-list" class="flex-grow overflow-y-auto"></div>
+                </div>
+                <div id="subtitle-tracks-panel" class="side-panel absolute top-0 right-0 h-full w-80 bg-black/95 z-30 p-4 flex flex-col">
+                    <h3 class="text-lg font-bold mb-4 flex-shrink-0">Subtitle Tracks</h3>
+                    <div id="subtitle-tracks-list" class="flex-grow overflow-y-auto"></div>
+                    <button id="custom-subtitle-btn" class="w-full text-left font-semibold bg-gray-700/50 p-3 rounded flex items-center justify-between mt-4 flex-shrink-0 hover:bg-gray-600 transition"><span>Load Custom</span><i class="fas fa-plus"></i></button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            let backend;
+            let playlist = [];
+            let currentVideoIndex = 0;
+            let totalDurationMs = 0;
+            let inactivityTimer, trackNotificationTimer, volumeNotificationTimer, panelHideTimer;
+            let showRemainingTime = false;
+
+            const elements = {
+                appContainer: document.getElementById('app-container'),
+                localFileSection: document.getElementById('local-file-section'),
+                videoPlayerSection: document.getElementById('video-player-section'),
+                videoContainer: document.getElementById('video-container'),
+                videoTitle: document.getElementById('video-title'),
+                playPauseBtn: document.getElementById('play-pause-btn'),
+                progressBar: document.getElementById('progress-bar'),
+                progressTooltip: document.getElementById('progress-tooltip'),
+                currentTimeDisplay: document.getElementById('current-time'),
+                totalTimeDisplay: document.getElementById('total-time'),
+                fullscreenBtn: document.getElementById('fullscreen-btn'),
+                backBtn: document.getElementById('back-btn'),
+                openFileBtn: document.getElementById('open-file-btn'),
+                nextBtn: document.getElementById('next-btn'),
+                prevBtn: document.getElementById('prev-btn'),
+                lockBtn: document.getElementById('lock-btn'),
+                unlockBtn: document.getElementById('unlock-btn'),
+                seekBackward10Btn: document.getElementById('seek-backward-10-btn'),
+                seekForward10Btn: document.getElementById('seek-forward-10-btn'),
+                audioTracksBtn: document.getElementById('audio-tracks-btn'),
+                audioTracksPanel: document.getElementById('audio-tracks-panel'),
+                audioTracksList: document.getElementById('audio-tracks-list'),
+                subtitleTracksBtn: document.getElementById('subtitle-tracks-btn'),
+                subtitleTracksPanel: document.getElementById('subtitle-tracks-panel'),
+                subtitleTracksList: document.getElementById('subtitle-tracks-list'),
+                customSubtitleBtn: document.getElementById('custom-subtitle-btn'),
+                trackNotification: document.getElementById('track-notification'),
+                volumeNotification: document.getElementById('volume-notification'),
+                volumeIcon: document.getElementById('volume-icon'),
+                volumeLevel: document.getElementById('volume-level'),
+            };
+
+            // Connect to Python Backend seamlessly
+            new QWebChannel(qt.webChannelTransport, function(channel) {
+                backend = channel.objects.backend;
+                
+                backend.files_selected.connect(onFilesSelected);
+                backend.time_updated.connect(onTimeUpdated);
+                backend.state_changed.connect(onStateChanged);
+                backend.tracks_populated.connect(buildTrackUI);
+                
+                elements.openFileBtn.onclick = () => backend.openFileDialog();
+                elements.playPauseBtn.onclick = () => backend.togglePlay();
+                elements.fullscreenBtn.onclick = () => { backend.toggleFullscreen(); elements.appContainer.classList.toggle('is-fullscreen'); };
+                elements.progressBar.oninput = (e) => backend.seek(e.target.value / 100.0);
+                elements.customSubtitleBtn.onclick = () => backend.openSubtitleDialog();
+            });
+
+            const showTrackNotification = (message) => {
+                clearTimeout(trackNotificationTimer);
+                elements.volumeNotification.style.opacity = '0';
+                elements.trackNotification.textContent = message;
+                elements.trackNotification.style.opacity = '1';
+                trackNotificationTimer = setTimeout(() => elements.trackNotification.style.opacity = '0', 1500);
+            };
+            
+            const showVolumeNotification = (volume) => {
+                clearTimeout(volumeNotificationTimer);
+                elements.trackNotification.style.opacity = '0';
+                if (volume === 0) elements.volumeIcon.className = 'fas fa-volume-mute';
+                else if (volume < 50) elements.volumeIcon.className = 'fas fa-volume-down';
+                else elements.volumeIcon.className = 'fas fa-volume-up';
+                
+                elements.volumeLevel.textContent = `${volume}%`;
+                elements.volumeNotification.style.opacity = '1';
+                volumeNotificationTimer = setTimeout(() => elements.volumeNotification.style.opacity = '0', 1500);
+            };
+
+            const hideControls = () => {
+                const isFullScreen = elements.appContainer.classList.contains('is-fullscreen');
+                if (elements.videoContainer.classList.contains('locked') || isFullScreen || elements.playPauseBtn.innerHTML.includes('pause')) {
+                    elements.videoContainer.classList.add('inactive');
+                }
+            };
+            
+            const resetInactivityTimer = () => {
+                elements.videoContainer.classList.remove('inactive');
+                clearTimeout(inactivityTimer);
+                inactivityTimer = setTimeout(hideControls, 1500);
+            };
+
+            const onFilesSelected = (filePaths) => {
+                playlist = playlist.concat(filePaths);
+                if (playlist.length > 0) playFileFromPlaylist(0);
+            };
+
+            const playFileFromPlaylist = (index) => {
+                if (index < 0 || index >= playlist.length) return;
+                currentVideoIndex = index;
+                const filePath = playlist[currentVideoIndex];
+
+                elements.localFileSection.classList.add('hidden');
+                elements.videoPlayerSection.classList.remove('hidden');
+                elements.appContainer.classList.add('playing'); // Allows VLC to show through!
+                
+                elements.videoTitle.textContent = filePath.replace(/^.*[\\\/]/, '');
+                elements.prevBtn.style.opacity = currentVideoIndex === 0 ? '0.5' : '1';
+                elements.nextBtn.style.opacity = currentVideoIndex >= playlist.length - 1 ? '0.5' : '1';
+                
+                elements.audioTracksList.innerHTML = '<div class="text-gray-400 p-3">Loading...</div>';
+                elements.subtitleTracksList.innerHTML = '<div class="text-gray-400 p-3">Loading...</div>';
+                
+                backend.playFile(filePath);
+            };
+
+            const onStateChanged = (isPlaying) => {
+                elements.playPauseBtn.innerHTML = isPlaying ? `<i class="fas fa-pause-circle"></i>` : `<i class="fas fa-play-circle"></i>`;
+                if(isPlaying) resetInactivityTimer();
+                else { clearTimeout(inactivityTimer); elements.videoContainer.classList.remove('inactive'); }
+            };
+
+            const formatTime = (ms) => {
+                const totalSeconds = Math.floor(ms / 1000);
+                const hours = Math.floor(totalSeconds / 3600);
+                const minutes = Math.floor((totalSeconds % 3600) / 60);
+                const seconds = Math.floor(totalSeconds % 60);
+                if (hours > 0) return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+                return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+            };
+
+            const onTimeUpdated = (currentMs, totalMs) => {
+                totalDurationMs = totalMs;
+                elements.progressBar.value = (currentMs / totalMs) * 100;
+                elements.currentTimeDisplay.textContent = formatTime(currentMs);
+                elements.totalTimeDisplay.textContent = showRemainingTime ? `-${formatTime(totalMs - currentMs)}` : formatTime(totalMs);
+            };
+
+            const buildTrackUI = (audioTracks, subtitleTracks) => {
+                elements.audioTracksList.innerHTML = '';
+                audioTracks.forEach(stream => {
+                    const btn = document.createElement('button');
+                    btn.className = 'w-full text-left font-semibold bg-gray-700/50 p-3 rounded mb-2 hover:bg-gray-600 transition track-button';
+                    btn.textContent = stream.name || `Track ${stream.id}`;
+                    btn.onclick = (e) => { 
+                        document.querySelectorAll('#audio-tracks-list .track-button').forEach(b => b.classList.remove('active'));
+                        e.currentTarget.classList.add('active');
+                        backend.setAudioTrack(stream.id); 
+                        showTrackNotification(btn.textContent); 
+                    };
+                    elements.audioTracksList.appendChild(btn);
+                });
+
+                elements.subtitleTracksList.innerHTML = '';
+                const offBtn = document.createElement('button');
+                offBtn.className = 'w-full text-left font-semibold bg-blue-600 p-3 rounded mb-2 hover:bg-gray-600 transition track-button active';
+                offBtn.textContent = 'Off';
+                offBtn.onclick = (e) => { 
+                    document.querySelectorAll('#subtitle-tracks-list .track-button').forEach(b => b.classList.remove('active'));
+                    e.currentTarget.classList.add('active');
+                    e.currentTarget.style.backgroundColor = '#3b82f6';
+                    backend.setSubtitleTrack(-1); 
+                    showTrackNotification('Subtitles Off'); 
+                };
+                elements.subtitleTracksList.appendChild(offBtn);
+                
+                subtitleTracks.forEach(stream => {
+                    const btn = document.createElement('button');
+                    btn.className = 'w-full text-left font-semibold bg-gray-700/50 p-3 rounded mb-2 hover:bg-gray-600 transition track-button';
+                    btn.textContent = stream.name || `Track ${stream.id}`;
+                    btn.onclick = (e) => { 
+                        document.querySelectorAll('#subtitle-tracks-list .track-button').forEach(b => { b.classList.remove('active'); b.style.backgroundColor = ''; });
+                        e.currentTarget.classList.add('active');
+                        e.currentTarget.style.backgroundColor = '#3b82f6';
+                        backend.setSubtitleTrack(stream.id); 
+                        showTrackNotification(btn.textContent); 
+                    };
+                    elements.subtitleTracksList.appendChild(btn);
+                });
+            };
+
+            const cycleTracks = (selector) => {
+                const buttons = document.querySelectorAll(selector);
+                if (buttons.length <= 1) return;
+                let currentIndex = -1;
+                buttons.forEach((btn, index) => {
+                    if (btn.classList.contains('active') || btn.style.backgroundColor === 'rgb(59, 130, 246)') currentIndex = index;
+                });
+                const nextIndex = (currentIndex + 1) % buttons.length;
+                buttons[nextIndex].click();
+            };
+
+            elements.progressBar.addEventListener('mousemove', (e) => {
+                if(totalDurationMs === 0) return;
+                const rect = elements.progressBar.getBoundingClientRect();
+                const percent = (e.clientX - rect.left) / rect.width;
+                elements.progressTooltip.style.left = `${e.clientX - rect.left}px`;
+                elements.progressTooltip.textContent = formatTime(totalDurationMs * percent);
+                elements.progressTooltip.style.display = 'block';
+            });
+            elements.progressBar.addEventListener('mouseleave', () => elements.progressTooltip.style.display = 'none');
+            elements.totalTimeDisplay.addEventListener('click', () => showRemainingTime = !showRemainingTime);
+
+            elements.backBtn.addEventListener('click', () => {
+                elements.videoPlayerSection.classList.add('hidden');
+                elements.localFileSection.classList.remove('hidden');
+                elements.appContainer.classList.remove('playing');
+                backend.togglePlay();
+                playlist = [];
+            });
+            
+            elements.nextBtn.addEventListener('click', () => playFileFromPlaylist(currentVideoIndex + 1));
+            elements.prevBtn.addEventListener('click', () => playFileFromPlaylist(currentVideoIndex - 1));
+            elements.seekBackward10Btn.addEventListener('click', () => backend.seek((totalDurationMs !== 0 ? (totalDurationMs * (elements.progressBar.value / 100) - 10000) / totalDurationMs : 0)));
+            elements.seekForward10Btn.addEventListener('click', () => backend.seek((totalDurationMs !== 0 ? (totalDurationMs * (elements.progressBar.value / 100) + 10000) / totalDurationMs : 0)));
+
+            const showPanel = (panel) => {
+                clearTimeout(panelHideTimer);
+                if (panel === elements.audioTracksPanel) elements.subtitleTracksPanel.classList.remove('open');
+                if (panel === elements.subtitleTracksPanel) elements.audioTracksPanel.classList.remove('open');
+                panel.classList.add('open');
+            };
+            const startHideTimer = () => {
+                clearTimeout(panelHideTimer);
+                panelHideTimer = setTimeout(() => { elements.audioTracksPanel.classList.remove('open'); elements.subtitleTracksPanel.classList.remove('open'); }, 200);
+            };
+
+            elements.audioTracksBtn.addEventListener('mouseenter', () => showPanel(elements.audioTracksPanel));
+            elements.subtitleTracksBtn.addEventListener('mouseenter', () => showPanel(elements.subtitleTracksPanel));
+            elements.audioTracksPanel.addEventListener('mouseleave', startHideTimer);
+            elements.subtitleTracksPanel.addEventListener('mouseleave', startHideTimer);
+            elements.audioTracksBtn.addEventListener('mouseleave', startHideTimer);
+            elements.subtitleTracksBtn.addEventListener('mouseleave', startHideTimer);
+            elements.audioTracksPanel.addEventListener('mouseenter', () => clearTimeout(panelHideTimer));
+            elements.subtitleTracksPanel.addEventListener('mouseenter', () => clearTimeout(panelHideTimer));
+            
+            elements.lockBtn.addEventListener('click', (e) => { e.stopPropagation(); elements.videoContainer.classList.add('locked'); resetInactivityTimer(); });
+            elements.unlockBtn.addEventListener('click', (e) => { e.stopPropagation(); elements.videoContainer.classList.remove('locked'); resetInactivityTimer(); });
+            elements.videoContainer.addEventListener('mousemove', resetInactivityTimer);
+            elements.videoContainer.addEventListener('mouseleave', hideControls);
+            
+            document.addEventListener('keydown', (e) => {
+                if (e.target.tagName === 'INPUT' || elements.localFileSection.classList.contains('hidden') === false) return;
+                e.preventDefault();
+                switch (e.key.toLowerCase()) {
+                    case 'f': backend.toggleFullscreen(); elements.appContainer.classList.toggle('is-fullscreen'); break;
+                    case ' ': backend.togglePlay(); break;
+                    case 'arrowright': backend.seek((totalDurationMs !== 0 ? (totalDurationMs * (elements.progressBar.value / 100) + 5000) / totalDurationMs : 0)); break;
+                    case 'arrowleft': backend.seek((totalDurationMs !== 0 ? (totalDurationMs * (elements.progressBar.value / 100) - 5000) / totalDurationMs : 0)); break;
+                    case 'arrowup': backend.changeVolume(0.05).then(showVolumeNotification); break;
+                    case 'arrowdown': backend.changeVolume(-0.05).then(showVolumeNotification); break;
+                    case 'b': cycleTracks('#audio-tracks-list .track-button'); break;
+                    case 'v': cycleTracks('#subtitle-tracks-list .track-button'); break;
+                }
+            });
+            elements.videoContainer.addEventListener('dblclick', () => { backend.toggleFullscreen(); elements.appContainer.classList.toggle('is-fullscreen'); });
+        });
+    </script>
+</body>
+</html>
