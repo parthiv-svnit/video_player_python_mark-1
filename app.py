@@ -22,6 +22,7 @@ class VideoBackend(QObject):
     state_changed = pyqtSignal(bool)    
     files_selected = pyqtSignal(list)   
     tracks_populated = pyqtSignal(list, list) 
+    video_ended = pyqtSignal() # ADDED: Signal for when video finishes
     
     def __init__(self, player, parent=None):
         super().__init__(parent)
@@ -57,15 +58,59 @@ class VideoBackend(QObject):
             self.player.media_player.play()
             self.state_changed.emit(True)
 
+    # BUG FIX: True Stop command prevents video bleeding into the menu
+    @pyqtSlot()
+    def stopPlay(self):
+        self.player.media_player.stop()
+        self.state_changed.emit(False)
+
+    # BUG FIX: Clamp percentage between 0.0 and 1.0 to prevent 353-hour overflow
     @pyqtSlot(float)
     def seek(self, percentage):
+        percentage = max(0.0, min(1.0, percentage))
+        
+        # BUG FIX: Resurrect the VLC stream if user seeks after video has finished
+        state = self.player.media_player.get_state()
+        if state == vlc.State.Ended:
+            self.player.media_player.stop()
+            self.player.media_player.play()
+            
         length = self.player.media_player.get_length()
         if length > 0:
             self.player.media_player.set_time(int(length * percentage))
             
-    @pyqtSlot(float)
+    # ADDED: Precise relative seeking directly on the engine to prevent overflow
+    @pyqtSlot(int)
+    def seekRelative(self, ms):
+        state = self.player.media_player.get_state()
+        if state == vlc.State.Ended:
+            self.player.media_player.stop()
+            self.player.media_player.play()
+            
+        length = max(1, self.player.media_player.get_length())
+        current = max(0, self.player.media_player.get_time())
+        self.player.media_player.set_time(max(0, min(length, current + ms)))
+        
+    # ADDED: Calculate precise frame duration and skip
+    @pyqtSlot(int)
+    def seekFrame(self, frames):
+        fps = self.player.media_player.get_fps()
+        if fps <= 0: fps = 30.0 # Fallback for formats that don't report FPS
+        self.seekRelative(int((1000.0 / fps) * frames))
+
+    # ADDED: Mute toggle handler
+    @pyqtSlot(result=bool)
+    def toggleMute(self):
+        is_muted = self.player.media_player.audio_get_mute()
+        self.player.media_player.audio_set_mute(not is_muted)
+        return not is_muted
+        
+    # BUG FIX: result=int guarantees Javascript receives the volume integer
+    @pyqtSlot(float, result=int)
     def changeVolume(self, delta):
-        vol = max(0, min(100, self.player.media_player.audio_get_volume() + int(delta * 100)))
+        current_vol = self.player.media_player.audio_get_volume()
+        if current_vol < 0: current_vol = 100 # VLC defaults to -1 if uninitialized
+        vol = max(0, min(100, current_vol + int(delta * 100)))
         self.player.media_player.audio_set_volume(vol)
         return vol
 
@@ -86,7 +131,6 @@ class VideoBackend(QObject):
 
 class UIOverlay(QWidget):
     def __init__(self, parent):
-        # Creates a frameless, transparent window that floats on top of the main window
         super().__init__(parent, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
@@ -95,7 +139,6 @@ class UIOverlay(QWidget):
         settings = self.web_view.settings()
         settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True)
         
-        # Make the Chromium renderer transparent
         self.web_view.page().setBackgroundColor(Qt.GlobalColor.transparent)
         self.web_view.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         
@@ -109,7 +152,6 @@ class VideoPlayer(QMainWindow):
         self.setWindowTitle("MX Player - Desktop Edition")
         self.setGeometry(100, 100, 1280, 720)
         
-        # The Main Window holds ONLY the VLC Video (Opaque)
         self.video_frame = QWidget()
         self.video_frame.setStyleSheet("background-color: black;")
         self.setCentralWidget(self.video_frame)
@@ -117,6 +159,7 @@ class VideoPlayer(QMainWindow):
         self.instance = vlc.Instance("--no-xlib --drop-late-frames")
         self.media_player = self.instance.media_player_new()
         self.tracks_pushed = False
+        self.last_state = None # ADDED: Track previous VLC state
         
         if sys.platform.startswith('linux'):
             self.media_player.set_xwindow(self.video_frame.winId())
@@ -125,7 +168,6 @@ class VideoPlayer(QMainWindow):
         elif sys.platform == "darwin":
             self.media_player.set_nsobject(int(self.video_frame.winId()))
 
-        # Initialize the Floating UI Overlay
         self.overlay = UIOverlay(self)
         
         self.channel = QWebChannel()
@@ -143,7 +185,6 @@ class VideoPlayer(QMainWindow):
         self.timer.start()
 
     def sync_overlay(self):
-        # Keeps the invisible Web UI perfectly aligned over the VLC video
         if hasattr(self, 'overlay') and self.isVisible():
             pos = self.video_frame.mapToGlobal(self.video_frame.rect().topLeft())
             self.overlay.setGeometry(pos.x(), pos.y(), self.video_frame.width(), self.video_frame.height())
@@ -168,6 +209,13 @@ class VideoPlayer(QMainWindow):
 
     def sync_with_frontend(self):
         state = self.media_player.get_state()
+        
+        # BUG FIX: Emit ended signal to auto-play next and reset UI
+        if state == vlc.State.Ended and self.last_state != vlc.State.Ended:
+            self.backend.state_changed.emit(False)
+            self.backend.video_ended.emit()
+        self.last_state = state
+        
         if state in [vlc.State.Playing, vlc.State.Paused]:
             curr = self.media_player.get_time()
             total = self.media_player.get_length()
@@ -182,7 +230,6 @@ class VideoPlayer(QMainWindow):
 
 if __name__ == '__main__':
     ensure_qwebchannel()
-    # Notice we REMOVED --disable-gpu! GPU acceleration is back on for smooth hover effects.
     app = QApplication(sys.argv)
     player = VideoPlayer()
     player.show()
