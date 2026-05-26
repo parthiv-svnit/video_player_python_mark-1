@@ -51,8 +51,6 @@ class VideoBackend(QObject):
         super().__init__(parent)
         self.player = player
         self.current_video_path = ""
-        
-        # High-efficiency thumbnail extractor engine
         self.threadpool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         self.thumb_cache = {}
         self.last_thumb_time = -1
@@ -73,17 +71,13 @@ class VideoBackend(QObject):
     @pyqtSlot(str)
     def playFile(self, path):
         self.current_video_path = path
-        self.thumb_cache.clear() # Clear memory on new file
+        self.thumb_cache.clear() 
         
         media = self.player.instance.media_new(path)
         self.player.media_player.set_media(media)
         self.player.media_player.play()
         self.player.tracks_pushed = False
         self.state_changed.emit(True)
-        
-        self.player.overlay.raise_()
-        self.player.overlay.activateWindow()
-        self.player.overlay.web_view.setFocus()
         
     @pyqtSlot()
     def togglePlay(self):
@@ -157,8 +151,6 @@ class VideoBackend(QObject):
     @pyqtSlot(float)
     def requestThumbnail(self, time_sec):
         if not self.current_video_path: return
-        
-        # Rounding time slightly improves cache hit-rates
         time_sec = round(time_sec)
         self.last_thumb_time = time_sec
         
@@ -167,9 +159,7 @@ class VideoBackend(QObject):
             return
             
         def extract():
-            # If mouse already moved past this second, skip extraction to save CPU
             if self.last_thumb_time != time_sec: return
-            
             cmd = [
                 "ffmpeg", "-y", "-ss", str(time_sec), "-i", self.current_video_path,
                 "-vframes", "1", "-q:v", "5", "-s", "160x90",
@@ -178,12 +168,11 @@ class VideoBackend(QObject):
             try:
                 kwargs = {}
                 if sys.platform == "win32":
-                    kwargs['creationflags'] = 0x08000000 # Suppress command prompt window
+                    kwargs['creationflags'] = 0x08000000 
                 
                 p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, **kwargs)
                 out, _ = p.communicate()
                 
-                # Only push to UI if it's still the frame the user is hovering over
                 if out and self.last_thumb_time == time_sec:
                     b64 = base64.b64encode(out).decode('utf-8')
                     data_url = f"data:image/jpeg;base64,{b64}"
@@ -197,22 +186,27 @@ class VideoBackend(QObject):
     @pyqtSlot()
     def toggleFullscreen(self):
         if self.player.isFullScreen():
-            self.player.showNormal()
+            # Safely restore to exact prior state without doubling up events
+            if self.player.was_maximized:
+                self.player.showMaximized()
+            else:
+                self.player.showNormal()
         else:
+            self.player.was_maximized = self.player.isMaximized()
             self.player.showFullScreen()
-        
-        self.player.overlay.raise_()
-        self.player.overlay.activateWindow()
-        self.player.overlay.web_view.setFocus()
 
 class UIOverlay(QWidget):
     def __init__(self, parent, backend):
-        super().__init__(parent, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint)
+        super().__init__(parent, Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.NoDropShadowWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+        self.setContentsMargins(0, 0, 0, 0)
         self.setAcceptDrops(True)
         
         self.web_view = QWebEngineView(self)
+        self.web_view.setContentsMargins(0, 0, 0, 0)
+        self.web_view.setStyleSheet("border: none; outline: none; background: transparent;")
+        
         settings = self.web_view.settings()
         settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True)
         settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True)
@@ -229,16 +223,31 @@ class UIOverlay(QWidget):
         
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
         layout.addWidget(self.web_view)
+
+    def closeEvent(self, event):
+        # FIX: Ensure pressing Alt+F4 on the overlay reliably shuts down the entire app
+        if self.parent() and hasattr(self.parent(), 'is_closing') and not self.parent().is_closing:
+            self.parent().close()
+        super().closeEvent(event)
 
 class VideoPlayer(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("MX Player - Desktop Edition")
         self.setGeometry(100, 100, 1280, 720)
+        self.was_maximized = False
+        self.is_closing = False
+        
+        self.setContentsMargins(0, 0, 0, 0)
+        self.setStyleSheet("QMainWindow { background-color: black; border: none; margin: 0px; padding: 0px; }")
+        self.setStatusBar(None)
+        self.setMenuBar(None)
         
         self.video_frame = QWidget()
-        self.video_frame.setStyleSheet("background-color: black;")
+        self.video_frame.setContentsMargins(0, 0, 0, 0)
+        self.video_frame.setStyleSheet("background-color: black; border: none; margin: 0px; padding: 0px;")
         self.setCentralWidget(self.video_frame)
         
         self.instance = vlc.Instance("--no-xlib --drop-late-frames")
@@ -271,8 +280,18 @@ class VideoPlayer(QMainWindow):
 
     def sync_overlay(self):
         if hasattr(self, 'overlay') and self.isVisible():
-            pos = self.video_frame.mapToGlobal(self.video_frame.rect().topLeft())
-            self.overlay.setGeometry(pos.x(), pos.y(), self.video_frame.width(), self.video_frame.height())
+            if self.isFullScreen():
+                # FIX: Snaps exactly to hardware screen borders to destroy DWM shadow gaps
+                self.overlay.setGeometry(self.screen().geometry())
+            else:
+                pos = self.video_frame.mapToGlobal(self.video_frame.rect().topLeft())
+                self.overlay.setGeometry(pos.x(), pos.y(), self.video_frame.width(), self.video_frame.height())
+
+    def keyPressEvent(self, event):
+        # FIX: Forward all keyboard shortcuts directly to the Chromium layer safely
+        if hasattr(self, 'overlay') and self.overlay.isVisible():
+            QApplication.sendEvent(self.overlay.web_view.focusProxy(), event)
+        super().keyPressEvent(event)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -288,8 +307,10 @@ class VideoPlayer(QMainWindow):
         self.sync_overlay()
         
     def closeEvent(self, event):
+        self.is_closing = True
         self.media_player.stop()
-        self.overlay.close()
+        if hasattr(self, 'overlay'):
+            self.overlay.close()
         super().closeEvent(event)
 
     def sync_with_frontend(self):
