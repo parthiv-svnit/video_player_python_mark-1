@@ -39,14 +39,16 @@ class DropFilter(QObject):
                 return True
         return super().eventFilter(obj, event)
 
+
 class VideoBackend(QObject):
-    time_updated = pyqtSignal(int, int) 
-    state_changed = pyqtSignal(bool)    
-    files_selected = pyqtSignal(list)   
-    tracks_populated = pyqtSignal(list, list, int, int) 
-    video_ended = pyqtSignal()
-    thumbnail_ready = pyqtSignal(float, str) 
-    
+    time_updated      = pyqtSignal(int, int)
+    state_changed     = pyqtSignal(bool)
+    files_selected    = pyqtSignal(list)
+    tracks_populated  = pyqtSignal(list, list, int, int)
+    video_ended       = pyqtSignal()
+    thumbnail_ready   = pyqtSignal(float, str)
+    subtitle_added    = pyqtSignal(str)   # NEW: emitted after external subtitle loads
+
     def __init__(self, player, parent=None):
         super().__init__(parent)
         self.player = player
@@ -54,31 +56,46 @@ class VideoBackend(QObject):
         self.threadpool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         self.thumb_cache = {}
         self.last_thumb_time = -1
-        
+
     @pyqtSlot()
     def openFileDialog(self):
-        filenames, _ = QFileDialog.getOpenFileNames(self.player, "Open Video", "", "Video (*.mp4 *.mkv *.avi *.mov);;All (*)")
+        filenames, _ = QFileDialog.getOpenFileNames(
+            self.player, "Open Video", "",
+            "Video (*.mp4 *.mkv *.avi *.mov *.wmv *.flv *.webm *.ts *.m4v);;All (*)"
+        )
         if filenames:
             self.files_selected.emit(filenames)
 
     @pyqtSlot()
     def openSubtitleDialog(self):
-        filename, _ = QFileDialog.getOpenFileName(self.player, "Open Subtitle", "", "Subtitles (*.srt *.vtt *.ass);;All (*)")
+        filename, _ = QFileDialog.getOpenFileName(
+            self.player, "Open Subtitle", "",
+            "Subtitles (*.srt *.vtt *.ass *.ssa *.sub);;All (*)"
+        )
         if filename:
             self.player.media_player.video_set_subtitle_file(filename)
-            self.player.tracks_pushed = False 
+            # Give VLC a moment to register the track, then signal JS to rebuild subtitle UI
+            QTimer.singleShot(500, self._emit_subtitle_added)
+
+    def _emit_subtitle_added(self):
+        # Re-read spu descriptions and tell JS; JS will rebuild only the subtitle list
+        subs = [{"id": t[0], "name": t[1].decode('utf-8')}
+                for t in self.player.media_player.video_get_spu_description()
+                if t[0] != -1]
+        curr_sub = self.player.media_player.video_get_spu()
+        import json
+        self.subtitle_added.emit(json.dumps({"subs": subs, "current": curr_sub}))
 
     @pyqtSlot(str)
     def playFile(self, path):
         self.current_video_path = path
-        self.thumb_cache.clear() 
-        
+        self.thumb_cache.clear()
         media = self.player.instance.media_new(path)
         self.player.media_player.set_media(media)
         self.player.media_player.play()
         self.player.tracks_pushed = False
         self.state_changed.emit(True)
-        
+
     @pyqtSlot()
     def togglePlay(self):
         if self.player.media_player.is_playing():
@@ -96,30 +113,27 @@ class VideoBackend(QObject):
     @pyqtSlot(float)
     def seek(self, percentage):
         percentage = max(0.0, min(1.0, percentage))
-        state = self.player.media_player.get_state()
-        if state == vlc.State.Ended:
+        if self.player.media_player.get_state() == vlc.State.Ended:
             self.player.media_player.stop()
             self.player.media_player.play()
-            
         length = self.player.media_player.get_length()
         if length > 0:
             self.player.media_player.set_time(int(length * percentage))
-            
+
     @pyqtSlot(int)
     def seekRelative(self, ms):
-        state = self.player.media_player.get_state()
-        if state == vlc.State.Ended:
+        if self.player.media_player.get_state() == vlc.State.Ended:
             self.player.media_player.stop()
             self.player.media_player.play()
-            
         length = max(1, self.player.media_player.get_length())
         current = max(0, self.player.media_player.get_time())
         self.player.media_player.set_time(max(0, min(length, current + ms)))
-        
+
     @pyqtSlot(int)
     def seekFrame(self, frames):
         fps = self.player.media_player.get_fps()
-        if fps <= 0: fps = 30.0 
+        if fps <= 0:
+            fps = 30.0
         self.seekRelative(int((1000.0 / fps) * frames))
 
     @pyqtSlot(result=bool)
@@ -127,11 +141,12 @@ class VideoBackend(QObject):
         is_muted = self.player.media_player.audio_get_mute()
         self.player.media_player.audio_set_mute(not is_muted)
         return not is_muted
-        
+
     @pyqtSlot(float, result=int)
     def changeVolume(self, delta):
         current_vol = self.player.media_player.audio_get_volume()
-        if current_vol < 0: current_vol = 100 
+        if current_vol < 0:
+            current_vol = 100
         vol = max(0, min(100, current_vol + int(delta * 100)))
         self.player.media_player.audio_set_volume(vol)
         return vol
@@ -139,7 +154,7 @@ class VideoBackend(QObject):
     @pyqtSlot(int)
     def setAudioTrack(self, track_id):
         self.player.media_player.audio_set_track(track_id)
-        
+
     @pyqtSlot(int)
     def setSubtitleTrack(self, track_id):
         self.player.media_player.video_set_spu(track_id)
@@ -150,16 +165,17 @@ class VideoBackend(QObject):
 
     @pyqtSlot(float)
     def requestThumbnail(self, time_sec):
-        if not self.current_video_path: return
+        if not self.current_video_path:
+            return
         time_sec = round(time_sec)
         self.last_thumb_time = time_sec
-        
         if time_sec in self.thumb_cache:
             self.thumbnail_ready.emit(time_sec, self.thumb_cache[time_sec])
             return
-            
+
         def extract():
-            if self.last_thumb_time != time_sec: return
+            if self.last_thumb_time != time_sec:
+                return
             cmd = [
                 "ffmpeg", "-y", "-ss", str(time_sec), "-i", self.current_video_path,
                 "-vframes", "1", "-q:v", "5", "-s", "160x90",
@@ -168,11 +184,9 @@ class VideoBackend(QObject):
             try:
                 kwargs = {}
                 if sys.platform == "win32":
-                    kwargs['creationflags'] = 0x08000000 
-                
+                    kwargs['creationflags'] = 0x08000000
                 p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, **kwargs)
                 out, _ = p.communicate()
-                
                 if out and self.last_thumb_time == time_sec:
                     b64 = base64.b64encode(out).decode('utf-8')
                     data_url = f"data:image/jpeg;base64,{b64}"
@@ -180,20 +194,35 @@ class VideoBackend(QObject):
                     self.thumbnail_ready.emit(time_sec, data_url)
             except Exception:
                 pass
-                
+
         self.threadpool.submit(extract)
-        
+
+    # ── Window management slots ──────────────────────────────────────────────
+
     @pyqtSlot()
     def toggleFullscreen(self):
-        if self.player.isFullScreen():
-            # Safely restore to exact prior state without doubling up events
-            if self.player.was_maximized:
-                self.player.showMaximized()
-            else:
-                self.player.showNormal()
-        else:
-            self.player.was_maximized = self.player.isMaximized()
-            self.player.showFullScreen()
+        self.player.toggleFullscreen()
+
+    @pyqtSlot()
+    def minimizeWindow(self):
+        self.player.showMinimized()
+
+    @pyqtSlot()
+    def maximizeWindow(self):
+        self.player.toggleMaximize()
+
+    @pyqtSlot(int, int)
+    def startDrag(self, screen_x, screen_y):
+        self.player.startDrag(screen_x, screen_y)
+
+    @pyqtSlot(int, int)
+    def doDrag(self, screen_x, screen_y):
+        self.player.doDrag(screen_x, screen_y)
+
+    @pyqtSlot()
+    def closeWindow(self):
+        self.player.close()
+
 
 class UIOverlay(QWidget):
     def __init__(self, parent, backend):
@@ -202,65 +231,78 @@ class UIOverlay(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
         self.setContentsMargins(0, 0, 0, 0)
         self.setAcceptDrops(True)
-        
+
         self.web_view = QWebEngineView(self)
         self.web_view.setContentsMargins(0, 0, 0, 0)
         self.web_view.setStyleSheet("border: none; outline: none; background: transparent;")
-        
+
         settings = self.web_view.settings()
         settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True)
         settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True)
-        
+
         self.web_view.page().setBackgroundColor(Qt.GlobalColor.transparent)
         self.web_view.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.web_view.setAcceptDrops(True)
-        
+
         self.drop_filter = DropFilter(backend)
         self.web_view.installEventFilter(self.drop_filter)
         if self.web_view.focusProxy():
             self.web_view.focusProxy().installEventFilter(self.drop_filter)
             self.web_view.focusProxy().setAcceptDrops(True)
-        
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(self.web_view)
 
     def closeEvent(self, event):
-        # FIX: Ensure pressing Alt+F4 on the overlay reliably shuts down the entire app
         if self.parent() and hasattr(self.parent(), 'is_closing') and not self.parent().is_closing:
             self.parent().close()
         super().closeEvent(event)
 
+
 class VideoPlayer(QMainWindow):
     def __init__(self):
         super().__init__()
+        # Always frameless — no OS chrome, ever. Fullscreen = setGeometry(screen). No DWM gaps.
+        self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
         self.setWindowTitle("MX Player - Desktop Edition")
         self.setGeometry(100, 100, 1280, 720)
-        self.was_maximized = False
-        self.is_closing = False
-        
+
+        self._is_fullscreen  = False
+        self._is_maximized   = False
+        self._saved_geometry = self.geometry()
+        self.is_closing      = False
+        self._drag_start_pos     = None
+        self._drag_start_win_pos = None
+
         self.setContentsMargins(0, 0, 0, 0)
         self.setStyleSheet("QMainWindow { background-color: black; border: none; margin: 0px; padding: 0px; }")
         self.setStatusBar(None)
         self.setMenuBar(None)
-        
+
+        self.TITLE_BAR_HEIGHT = 36
+
+        container = QWidget()
+        container.setContentsMargins(0, 0, 0, 0)
+        container.setStyleSheet("background-color: black; border: none; margin: 0px; padding: 0px;")
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, self.TITLE_BAR_HEIGHT, 0, 0)
+        layout.setSpacing(0)
+
         self.video_frame = QWidget()
         self.video_frame.setContentsMargins(0, 0, 0, 0)
         self.video_frame.setStyleSheet("background-color: black; border: none; margin: 0px; padding: 0px;")
-        self.setCentralWidget(self.video_frame)
-        
+        layout.addWidget(self.video_frame)
+
+        self._container_layout = layout
+        self.setCentralWidget(container)
+
         self.instance = vlc.Instance("--no-xlib --drop-late-frames")
         self.media_player = self.instance.media_player_new()
         self.tracks_pushed = False
-        self.last_state = None 
-        
-        if sys.platform.startswith('linux'):
-            self.media_player.set_xwindow(self.video_frame.winId())
-        elif sys.platform == "win32":
-            self.media_player.set_hwnd(self.video_frame.winId())
-        elif sys.platform == "darwin":
-            self.media_player.set_nsobject(int(self.video_frame.winId()))
+        self.last_state    = None
+        self._vlc_attached = False
 
         self.backend = VideoBackend(self)
         self.channel = QWebChannel()
@@ -268,76 +310,138 @@ class VideoPlayer(QMainWindow):
 
         self.overlay = UIOverlay(self, self.backend)
         self.overlay.web_view.page().setWebChannel(self.channel)
-        
+
         current_dir = os.path.dirname(os.path.abspath(__file__))
         html_path = os.path.join(current_dir, "index.html")
         self.overlay.web_view.setUrl(QUrl.fromLocalFile(html_path))
-        
+
         self.timer = QTimer(self)
         self.timer.setInterval(100)
         self.timer.timeout.connect(self.sync_with_frontend)
         self.timer.start()
 
-    def sync_overlay(self):
-        if hasattr(self, 'overlay') and self.isVisible():
-            if self.isFullScreen():
-                # FIX: Snaps exactly to hardware screen borders to destroy DWM shadow gaps
-                self.overlay.setGeometry(self.screen().geometry())
+    # ── Fullscreen / maximize / drag ────────────────────────────────────────
+
+    def toggleFullscreen(self):
+        if self._is_fullscreen:
+            self._is_fullscreen = False
+            self._container_layout.setContentsMargins(0, self.TITLE_BAR_HEIGHT, 0, 0)
+            if self._is_maximized:
+                self._applyMaximize()
             else:
-                pos = self.video_frame.mapToGlobal(self.video_frame.rect().topLeft())
-                self.overlay.setGeometry(pos.x(), pos.y(), self.video_frame.width(), self.video_frame.height())
+                self.setGeometry(self._saved_geometry)
+        else:
+            if not self._is_maximized:
+                self._saved_geometry = self.geometry()
+            self._is_fullscreen = True
+            self._container_layout.setContentsMargins(0, 0, 0, 0)
+            self.setGeometry(self.screen().geometry())
+        QTimer.singleShot(0, self.sync_overlay)
+
+    def toggleMaximize(self):
+        if self._is_fullscreen:
+            return
+        if self._is_maximized:
+            self._is_maximized = False
+            self.setGeometry(self._saved_geometry)
+        else:
+            self._saved_geometry = self.geometry()
+            self._is_maximized = True
+            self._applyMaximize()
+        QTimer.singleShot(0, self.sync_overlay)
+
+    def _applyMaximize(self):
+        # availableGeometry excludes taskbar — correct for a maximized frameless window
+        self.setGeometry(self.screen().availableGeometry())
+
+    def startDrag(self, screen_x, screen_y):
+        if self._is_fullscreen or self._is_maximized:
+            return
+        self._drag_start_pos     = (screen_x, screen_y)
+        self._drag_start_win_pos = (self.x(), self.y())
+
+    def doDrag(self, screen_x, screen_y):
+        if self._drag_start_pos is None:
+            return
+        dx = screen_x - self._drag_start_pos[0]
+        dy = screen_y - self._drag_start_pos[1]
+        self.move(self._drag_start_win_pos[0] + dx, self._drag_start_win_pos[1] + dy)
+
+    # ── Overlay sync ────────────────────────────────────────────────────────
+
+    def sync_overlay(self):
+        if not hasattr(self, 'overlay') or not self.isVisible():
+            return
+        # Mirror main window geometry exactly — no screen() guessing, no DPI ambiguity
+        self.overlay.setGeometry(self.geometry())
+
+    # ── Qt event overrides ──────────────────────────────────────────────────
 
     def keyPressEvent(self, event):
-        # FIX: Forward all keyboard shortcuts directly to the Chromium layer safely
         if hasattr(self, 'overlay') and self.overlay.isVisible():
             QApplication.sendEvent(self.overlay.web_view.focusProxy(), event)
         super().keyPressEvent(event)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        self.sync_overlay()
+        QTimer.singleShot(0, self.sync_overlay)
 
     def moveEvent(self, event):
         super().moveEvent(event)
-        self.sync_overlay()
+        QTimer.singleShot(0, self.sync_overlay)
 
     def showEvent(self, event):
         super().showEvent(event)
+        if not self._vlc_attached:
+            self._vlc_attached = True
+            if sys.platform.startswith('linux'):
+                self.media_player.set_xwindow(int(self.video_frame.winId()))
+            elif sys.platform == "win32":
+                self.media_player.set_hwnd(int(self.video_frame.winId()))
+            elif sys.platform == "darwin":
+                self.media_player.set_nsobject(int(self.video_frame.winId()))
         self.overlay.show()
-        self.sync_overlay()
-        
+        QTimer.singleShot(0, self.sync_overlay)
+
     def closeEvent(self, event):
         self.is_closing = True
+        self.timer.stop()
         self.media_player.stop()
+        self.backend.threadpool.shutdown(wait=False)
         if hasattr(self, 'overlay'):
             self.overlay.close()
         super().closeEvent(event)
 
+    # ── Polling loop ────────────────────────────────────────────────────────
+
     def sync_with_frontend(self):
         state = self.media_player.get_state()
-        
+
         if state == vlc.State.Ended and self.last_state != vlc.State.Ended:
             self.backend.state_changed.emit(False)
             self.backend.video_ended.emit()
         self.last_state = state
-        
-        if state in [vlc.State.Playing, vlc.State.Paused]:
-            curr = self.media_player.get_time()
+
+        if state in (vlc.State.Playing, vlc.State.Paused):
+            curr  = self.media_player.get_time()
             total = self.media_player.get_length()
-            
             self.backend.time_updated.emit(curr, total)
-            
+
             if not self.tracks_pushed and total > 0:
                 self.media_player.video_set_spu(-1)
-                
-                audio = [{"id": t[0], "name": t[1].decode('utf-8')} for t in self.media_player.audio_get_track_description()]
-                subs = [{"id": t[0], "name": t[1].decode('utf-8')} for t in self.media_player.video_get_spu_description() if t[0] != -1]
-                
+
+                audio = [{"id": t[0], "name": t[1].decode('utf-8')}
+                         for t in self.media_player.audio_get_track_description()]
+                subs  = [{"id": t[0], "name": t[1].decode('utf-8')}
+                         for t in self.media_player.video_get_spu_description()
+                         if t[0] != -1]
+
                 curr_audio = self.media_player.audio_get_track()
-                curr_sub = self.media_player.video_get_spu() 
-                
+                curr_sub   = self.media_player.video_get_spu()
+
                 self.backend.tracks_populated.emit(audio, subs, curr_audio, curr_sub)
                 self.tracks_pushed = True
+
 
 if __name__ == '__main__':
     ensure_qwebchannel()

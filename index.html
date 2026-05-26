@@ -3,28 +3,133 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>MX Player - Desktop Edition</title>
+    <title>MX Player</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" rel="stylesheet">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script src="qwebchannel.js"></script>
     <style>
-        /* Changed width/height to absolute 100% to ensure no sub-pixel scrollbar rendering gaps */
-        html, body { font-family: 'Inter', sans-serif; background-color: transparent !important; color: #e0e0e0; margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; border: none; }
-        
+        html, body {
+            font-family: 'Inter', sans-serif;
+            background-color: transparent !important;
+            color: #e0e0e0;
+            margin: 0; padding: 0;
+            width: 100%; height: 100%;
+            overflow: hidden;
+        }
         *:focus { outline: none !important; }
 
-        #app-container { width: 100%; height: 100%; position: absolute; top: 0; left: 0; background-color: #121212; transition: background-color 0.3s; border: none; }
-        #app-container.playing { background-color: transparent !important; }
-        #video-player-section, #video-container { background-color: transparent !important; outline: none; border: none; }
-        
-        .controls-bar { opacity: 1; visibility: visible; transition: opacity 0.3s ease-in-out, visibility 0.3s ease-in-out; will-change: opacity, visibility; }
-        .video-container.inactive .controls-bar, .video-container.locked .controls-bar { opacity: 0; visibility: hidden; }
+        /* ── Shell layout: title bar + content stacked vertically ── */
+        #shell {
+            display: flex;
+            flex-direction: column;
+            width: 100%; height: 100%;
+            background: transparent;
+        }
+        /* In fullscreen the title bar is hidden and video takes 100% */
+        #shell.fullscreen #title-bar { display: none; }
+        #shell.fullscreen #content    { height: 100%; }
+
+        /* ── Title bar ── */
+        #title-bar {
+            flex: 0 0 36px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 0 0 14px;
+            background: #1a1a1a;
+            user-select: none;
+            -webkit-user-select: none;
+            cursor: default;
+            z-index: 200;
+        }
+        /* When video is playing, make title bar semi-transparent so it doesn't block */
+        #shell.playing #title-bar {
+            background: rgba(26, 26, 26, 0.85);
+        }
+        #bar-title {
+            font-size: 13px; font-weight: 600; color: #999;
+            flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+            pointer-events: none;
+        }
+        .win-btns { display: flex; flex-shrink: 0; }
+        .win-btn {
+            width: 46px; height: 36px; border: none;
+            background: transparent; color: #aaa; font-size: 11px;
+            cursor: pointer; display: flex; align-items: center; justify-content: center;
+            transition: background 0.12s, color 0.12s;
+        }
+        .win-btn:hover       { background: rgba(255,255,255,0.1); color: #fff; }
+        .win-btn.close-btn:hover { background: #e81123; color: #fff; }
+
+        /* ── Content area ── */
+        #content {
+            flex: 1 1 0;
+            position: relative;
+            overflow: hidden;
+            min-height: 0;
+        }
+
+        /* Home screen */
+        #local-file-section {
+            position: absolute; inset: 0;
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            background: #121212;
+        }
+        #local-file-section.hidden { display: none; }
+
+        /* Video player section */
+        #video-player-section {
+            position: absolute; inset: 0;
+            background: transparent;
+        }
+        #video-player-section.hidden { display: none; }
+
+        #video-container {
+            position: relative; width: 100%; height: 100%;
+            background: transparent;
+        }
+
+        /* Controls visibility */
+        .controls-bar {
+            opacity: 1; visibility: visible;
+            transition: opacity 0.3s ease-in-out, visibility 0.3s ease-in-out;
+            will-change: opacity, visibility;
+        }
+        .video-container.inactive .controls-bar,
+        .video-container.locked  .controls-bar { opacity: 0; visibility: hidden; }
         .video-container.inactive { cursor: none; }
         .video-container.locked.inactive { cursor: none; }
-        
+
+        /* Gradients only show in fullscreen (where bg is transparent) */
+        .top-controls-gradient { background: transparent; }
+        .bottom-controls-gradient { background: transparent; }
+        #shell.fullscreen .top-controls-gradient  { background: linear-gradient(to bottom, rgba(0,0,0,0.65), transparent); }
+        #shell.fullscreen .bottom-controls-gradient { background: linear-gradient(to top, rgba(0,0,0,0.8), transparent); }
+
+        /* Fullscreen floating bottom bar */
+        #shell.fullscreen .bottom-controls {
+            position: absolute; bottom: 5%; left: 50%; transform: translateX(-50%);
+            width: 65%; max-width: 750px;
+            background: rgba(40,40,40,0.35);
+            backdrop-filter: blur(24px) saturate(150%);
+            -webkit-backdrop-filter: blur(24px) saturate(150%);
+            border: 1px solid rgba(255,255,255,0.15);
+            box-shadow: 0 10px 40px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.1);
+            border-radius: 20px; padding: 0.75rem 1.5rem;
+        }
+        #shell.fullscreen .top-controls {
+            opacity: 0; visibility: hidden; transition: none;
+        }
+        #shell.fullscreen .video-container.active .top-controls {
+            opacity: 1; visibility: visible;
+            transition: opacity 0.3s ease-in-out, visibility 0.3s ease-in-out;
+        }
+
+        /* Icon buttons */
         .icon-btn i {
-            filter: drop-shadow(0px 2px 4px rgba(0, 0, 0, 0.8)) drop-shadow(0px 0px 2px rgba(255, 255, 255, 0.2));
+            filter: drop-shadow(0px 2px 4px rgba(0,0,0,0.8)) drop-shadow(0px 0px 2px rgba(255,255,255,0.2));
             transition: transform 0.2s, color 0.2s;
         }
         .icon-btn:hover i { transform: scale(1.1); color: #3b82f6; }
@@ -34,122 +139,174 @@
         }
         .text-icon-btn:hover { transform: scale(1.1); color: #3b82f6; }
 
-        .progress-bar { -webkit-appearance: none; appearance: none; width: 100%; height: 5px; background: rgba(255, 255, 255, 0.2); outline: none; transition: height 0.2s ease; cursor: pointer; border-radius: 4px; }
+        /* Progress / speed sliders */
+        .progress-bar {
+            -webkit-appearance: none; appearance: none;
+            width: 100%; height: 5px;
+            background: rgba(255,255,255,0.2); outline: none;
+            transition: height 0.2s ease; cursor: pointer; border-radius: 4px;
+        }
         .progress-bar:hover { height: 7px; }
-        .progress-bar::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 15px; height: 15px; background: #3b82f6; border-radius: 50%; cursor: pointer; box-shadow: 0 0 4px rgba(0,0,0,0.5); }
-        
-        .floating-panel { 
-            transition: opacity 0.2s, transform 0.2s cubic-bezier(0.16, 1, 0.3, 1); 
+        .progress-bar::-webkit-slider-thumb {
+            -webkit-appearance: none; appearance: none;
+            width: 15px; height: 15px; background: #3b82f6;
+            border-radius: 50%; cursor: pointer; box-shadow: 0 0 4px rgba(0,0,0,0.5);
+        }
+
+        /* Floating panels */
+        .floating-panel {
+            transition: opacity 0.2s, transform 0.2s cubic-bezier(0.16,1,0.3,1);
             transform: translateY(10px); opacity: 0; visibility: hidden;
-            background: rgba(40, 40, 40, 0.4); 
-            backdrop-filter: blur(24px) saturate(150%); 
+            background: rgba(40,40,40,0.4);
+            backdrop-filter: blur(24px) saturate(150%);
             -webkit-backdrop-filter: blur(24px) saturate(150%);
-            border: 1px solid rgba(255, 255, 255, 0.15);
-            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(255,255,255,0.15);
+            box-shadow: 0 10px 40px rgba(0,0,0,0.5);
             border-radius: 16px;
         }
         .floating-panel.open { transform: translateY(0); opacity: 1; visibility: visible; }
         .track-button.active { background-color: #3b82f6 !important; color: white !important; }
-        
-        #unlock-btn { position: absolute; top: 1.5rem; right: 1.5rem; background: rgba(0,0,0,0.7); color: white; width: 50px; height: 50px; border-radius: 50%; z-index: 9999; cursor: pointer; display: none; align-items: center; justify-content: center; opacity: 1; transition: opacity 0.3s ease-in-out; }
+
+        /* Unlock button */
+        #unlock-btn {
+            position: absolute; top: 1.5rem; right: 1.5rem;
+            background: rgba(0,0,0,0.7); color: white;
+            width: 50px; height: 50px; border-radius: 50%;
+            z-index: 9999; cursor: pointer;
+            display: none; align-items: center; justify-content: center;
+            opacity: 1; transition: opacity 0.3s ease-in-out;
+        }
         .video-container.locked #unlock-btn { display: flex; }
         .video-container.locked.inactive #unlock-btn { opacity: 0; }
-        
-        #app-container.is-fullscreen .bottom-controls { 
-            position: absolute; bottom: 5%; left: 50%; transform: translateX(-50%); 
-            width: 65%; max-width: 750px; 
-            background: rgba(40, 40, 40, 0.35); 
-            backdrop-filter: blur(24px) saturate(150%); 
-            -webkit-backdrop-filter: blur(24px) saturate(150%);
-            border: 1px solid rgba(255, 255, 255, 0.15);
-            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.1);
-            border-radius: 20px; padding: 0.75rem 1.5rem; 
-        }
-        
-        #app-container.is-fullscreen .top-controls { opacity: 0; visibility: hidden; transition: none; }
-        #app-container.is-fullscreen .video-container.active .top-controls { opacity: 1; visibility: visible; transition: opacity 0.3s ease-in-out, visibility 0.3s ease-in-out; }
-        
+
+        /* Tooltip */
         .progress-bar-wrapper { position: relative; }
-        #progress-tooltip { position: absolute; bottom: 20px; background-color: rgba(20,20,20,0.9); border: 1px solid rgba(255,255,255,0.2); color: white; padding: 6px; border-radius: 8px; font-size: 13px; pointer-events: none; transform: translateX(-50%); display: none; box-shadow: 0 4px 12px rgba(0,0,0,0.5); flex-direction: column; align-items: center; }
-        
+        #progress-tooltip {
+            position: absolute; bottom: 20px;
+            background-color: rgba(20,20,20,0.9);
+            border: 1px solid rgba(255,255,255,0.2); color: white;
+            padding: 6px; border-radius: 8px; font-size: 13px;
+            pointer-events: none; transform: translateX(-50%);
+            display: none; box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+            flex-direction: column; align-items: center;
+        }
+
+        /* Notifications */
         .notification-center { pointer-events: none; transition: opacity 0.3s ease-in-out; }
+
+        /* Scrollbar */
         .panel-scroll::-webkit-scrollbar { width: 6px; }
-        .panel-scroll::-webkit-scrollbar-track { background: rgba(255, 255, 255, 0.05); border-radius: 3px; }
+        .panel-scroll::-webkit-scrollbar-track { background: rgba(255,255,255,0.05); border-radius: 3px; }
         .panel-scroll::-webkit-scrollbar-thumb { background: #3b82f6; border-radius: 3px; }
     </style>
 </head>
-<body class="overflow-hidden">
+<body>
 
-    <div id="app-container" class="flex flex-col items-center justify-center">
-        <div id="local-file-section" class="text-center p-8 w-full max-w-2xl">
+<div id="shell">
+
+    <!-- Custom title bar -->
+    <div id="title-bar" id="title-bar">
+        <span id="bar-title">MX Player</span>
+        <div class="win-btns">
+            <button class="win-btn" id="win-min-btn" title="Minimize">
+                <svg width="10" height="1" viewBox="0 0 10 1"><rect width="10" height="1" fill="currentColor"/></svg>
+            </button>
+            <button class="win-btn" id="win-max-btn" title="Maximize">
+                <svg id="max-icon" width="10" height="10" viewBox="0 0 10 10">
+                    <rect x="0.5" y="0.5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1"/>
+                </svg>
+            </button>
+            <button class="win-btn close-btn" id="win-close-btn" title="Close">
+                <svg width="10" height="10" viewBox="0 0 10 10">
+                    <line x1="0" y1="0" x2="10" y2="10" stroke="currentColor" stroke-width="1.3"/>
+                    <line x1="10" y1="0" x2="0" y2="10" stroke="currentColor" stroke-width="1.3"/>
+                </svg>
+            </button>
+        </div>
+    </div>
+
+    <!-- Content area -->
+    <div id="content">
+
+        <!-- Home screen -->
+        <div id="local-file-section" class="text-center p-8 w-full max-w-2xl" style="max-width:42rem; margin: 0 auto; position: absolute; top:50%; left:50%; transform:translate(-50%,-50%); width:100%;">
             <h1 class="text-5xl font-bold text-white mb-4"><span class="text-blue-500">MX</span> Player</h1>
             <p class="text-gray-400 mb-8 text-lg">Your Personal Video Player</p>
             <button id="open-file-btn" class="bg-blue-600 text-white px-8 py-4 rounded-full font-semibold hover:bg-blue-700 transition text-xl shadow-lg shadow-blue-500/20">
                 <i class="fas fa-folder-open mr-3"></i> Open Video(s)
             </button>
-            
-            <div id="drop-zone" class="mt-8 border-2 border-dashed border-gray-600 rounded-2xl p-10 hover:border-blue-500 transition cursor-pointer bg-gray-800/30 hover:bg-gray-800/60" onclick="backend.openFileDialog()">
+            <div id="drop-zone" class="mt-8 border-2 border-dashed border-gray-600 rounded-2xl p-10 hover:border-blue-500 transition cursor-pointer bg-gray-800/30 hover:bg-gray-800/60">
                 <i class="fas fa-cloud-upload-alt text-5xl text-blue-500 mb-4"></i>
-                <p class="text-gray-300 text-lg font-medium">Drag & Drop videos here</p>
+                <p class="text-gray-300 text-lg font-medium">Drag &amp; Drop videos here</p>
                 <p class="text-gray-500 text-sm mt-2">or click anywhere inside this box to browse</p>
             </div>
         </div>
 
-        <div id="video-player-section" class="w-full h-full hidden outline-none" tabindex="0">
-            <div id="video-container" class="relative w-full h-full video-container outline-none">
-                
+        <!-- Video player -->
+        <div id="video-player-section" class="hidden">
+            <div id="video-container" class="video-container">
+
+                <!-- Center notifications -->
                 <div id="track-notification" class="notification-center absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-black/70 text-white px-4 py-2 rounded-lg text-lg z-50 opacity-0"></div>
                 <div id="volume-notification" class="notification-center absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 bg-black/70 text-white px-4 py-2 rounded-lg text-lg z-50 opacity-0 flex items-center space-x-2">
                     <i id="volume-icon" class="fas fa-volume-up"></i>
                     <span id="volume-level">100%</span>
                 </div>
 
-                <div class="controls-bar top-controls absolute top-0 left-0 right-0 p-4 bg-gradient-to-b from-black/60 to-transparent z-20">
+                <!-- Top controls -->
+                <div class="controls-bar top-controls top-controls-gradient absolute top-0 left-0 right-0 p-4 z-20">
                     <div class="flex items-center justify-between w-full">
                         <div class="flex items-center space-x-4 flex-1 min-w-0">
                             <button id="back-btn" class="text-white text-xl px-2 flex-shrink-0 icon-btn"><i class="fas fa-arrow-left"></i></button>
-                            <h2 id="video-title" class="text-white text-lg font-semibold truncate" style="text-shadow: 0px 2px 4px rgba(0,0,0,0.8);"></h2>
+                            <h2 id="video-title" class="text-white text-lg font-semibold truncate" style="text-shadow:0px 2px 4px rgba(0,0,0,0.8);"></h2>
                         </div>
                         <div class="flex items-center space-x-5 flex-shrink-0 relative">
+                            <!-- Audio tracks -->
                             <div class="relative">
                                 <button id="audio-tracks-btn" class="text-white text-xl icon-btn py-2"><i class="fas fa-music"></i></button>
                                 <div id="audio-tracks-panel" class="floating-panel absolute top-full right-0 mt-2 w-72 z-30 p-4 flex flex-col max-h-[70vh]">
-                                    <h3 class="text-lg font-bold mb-3 flex-shrink-0 text-white" style="text-shadow: 0 1px 2px rgba(0,0,0,0.8);">Audio Tracks</h3>
+                                    <h3 class="text-lg font-bold mb-3 flex-shrink-0 text-white">Audio Tracks</h3>
                                     <div id="audio-tracks-list" class="flex-grow overflow-y-auto panel-scroll"></div>
                                 </div>
                             </div>
-                            
+                            <!-- Subtitle tracks -->
                             <div class="relative">
                                 <button id="subtitle-tracks-btn" class="text-white text-xl icon-btn py-2"><i class="fas fa-closed-captioning"></i></button>
                                 <div id="subtitle-tracks-panel" class="floating-panel absolute top-full right-0 mt-2 w-72 z-30 p-4 flex flex-col max-h-[70vh]">
-                                    <h3 class="text-lg font-bold mb-3 flex-shrink-0 text-white" style="text-shadow: 0 1px 2px rgba(0,0,0,0.8);">Subtitle Tracks</h3>
+                                    <h3 class="text-lg font-bold mb-3 flex-shrink-0 text-white">Subtitle Tracks</h3>
                                     <div id="subtitle-tracks-list" class="flex-grow overflow-y-auto panel-scroll"></div>
-                                    <button id="custom-subtitle-btn" class="w-full text-left font-semibold bg-gray-700/50 p-2.5 rounded-lg flex items-center justify-between mt-3 flex-shrink-0 hover:bg-gray-600 transition text-white"><span>Load Custom</span><i class="fas fa-plus text-sm"></i></button>
+                                    <button id="custom-subtitle-btn" class="w-full text-left font-semibold bg-gray-700/50 p-2.5 rounded-lg flex items-center justify-between mt-3 flex-shrink-0 hover:bg-gray-600 transition text-white">
+                                        <span>Load Custom</span><i class="fas fa-plus text-sm"></i>
+                                    </button>
                                 </div>
                             </div>
                         </div>
                     </div>
                 </div>
 
-                <div class="controls-bar bottom-controls w-full absolute bottom-0 left-0 p-4 bg-gradient-to-t from-black/80 to-transparent z-20">
+                <!-- Bottom controls -->
+                <div class="controls-bar bottom-controls bottom-controls-gradient w-full absolute bottom-0 left-0 p-4 z-20">
                     <div class="w-full mb-3 progress-bar-wrapper">
                         <div id="progress-tooltip" class="flex flex-col items-center">
-                            <img id="thumb-img" class="rounded bg-black mb-1.5 hidden shadow-md object-cover" width="160" height="90" style="min-width: 160px; min-height: 90px;">
+                            <img id="thumb-img" class="rounded bg-black mb-1.5 hidden shadow-md object-cover" width="160" height="90" style="min-width:160px;min-height:90px;">
                             <span id="tooltip-time" class="font-mono font-medium">00:00</span>
                         </div>
-                        <div class="flex justify-between items-center text-xs font-mono text-white px-1 mb-1" style="text-shadow: 0px 1px 2px rgba(0,0,0,0.8);"><span id="current-time">00:00</span><span id="total-time" class="cursor-pointer">00:00</span></div>
-                        <input type="range" id="progress-bar" class="progress-bar" value="0" min="0" max="100">
+                        <div class="flex justify-between items-center text-xs font-mono text-white px-1 mb-1" style="text-shadow:0px 1px 2px rgba(0,0,0,0.8);">
+                            <span id="current-time">00:00</span>
+                            <span id="total-time" class="cursor-pointer">00:00</span>
+                        </div>
+                        <input type="range" id="progress-bar" class="progress-bar" value="0" min="0" max="100" step="0.01">
                     </div>
-                    
+
                     <div class="flex items-center justify-between w-full">
+                        <!-- Left: lock, mute, speed -->
                         <div class="flex items-center space-x-3 flex-1 justify-start">
-                            <button id="lock-btn" class="text-white text-2xl icon-btn"><i class="fas fa-lock"></i></button>
-                            <button id="mute-btn" class="text-white text-2xl icon-btn"><i class="fas fa-volume-up"></i></button>
-                            
+                            <button id="lock-btn"  class="text-white text-2xl icon-btn"><i class="fas fa-lock"></i></button>
+                            <button id="mute-btn"  class="text-white text-2xl icon-btn"><i class="fas fa-volume-up"></i></button>
                             <div class="relative">
                                 <button id="speed-btn" class="text-white text-lg font-bold px-1 text-icon-btn">1x</button>
                                 <div id="speed-panel" class="floating-panel absolute bottom-full left-0 mb-4 w-[300px] z-30 p-4 flex flex-col">
-                                    <div class="flex justify-between items-center text-white font-bold mb-3" style="text-shadow: 0 1px 2px rgba(0,0,0,0.8);">
+                                    <div class="flex justify-between items-center text-white font-bold mb-3">
                                         <span>Playback Speed</span>
                                         <span id="speed-display-text">1x</span>
                                     </div>
@@ -164,378 +321,480 @@
                             </div>
                         </div>
 
+                        <!-- Centre: playback controls -->
                         <div class="flex items-center justify-center space-x-6 flex-1">
                             <button id="seek-backward-10-btn" class="text-white text-2xl icon-btn"><i class="fas fa-undo"></i></button>
-                            <button id="prev-btn" class="text-white text-3xl icon-btn"><i class="fas fa-backward-step"></i></button>
-                            <button id="play-pause-btn" class="text-white text-5xl icon-btn"><i class="fas fa-play-circle"></i></button>
-                            <button id="next-btn" class="text-white text-3xl icon-btn"><i class="fas fa-forward-step"></i></button>
-                            <button id="seek-forward-10-btn" class="text-white text-2xl icon-btn"><i class="fas fa-redo"></i></button>
+                            <button id="prev-btn"             class="text-white text-3xl icon-btn"><i class="fas fa-backward-step"></i></button>
+                            <button id="play-pause-btn"       class="text-white text-5xl icon-btn"><i class="fas fa-play-circle"></i></button>
+                            <button id="next-btn"             class="text-white text-3xl icon-btn"><i class="fas fa-forward-step"></i></button>
+                            <button id="seek-forward-10-btn"  class="text-white text-2xl icon-btn"><i class="fas fa-redo"></i></button>
                         </div>
-                        
+
+                        <!-- Right: fullscreen -->
                         <div class="flex items-center flex-1 justify-end">
                             <button id="fullscreen-btn" class="text-white text-2xl icon-btn"><i class="fas fa-expand-arrows-alt"></i></button>
                         </div>
                     </div>
                 </div>
-                
+
                 <button id="unlock-btn" class="hover:bg-blue-600 transition"><i class="fas fa-lock-open fa-lg"></i></button>
             </div>
         </div>
-    </div>
 
-    <script>
-        document.addEventListener('DOMContentLoaded', () => {
-            let backend;
-            let playlist = [];
-            let currentVideoIndex = 0;
-            let totalDurationMs = 0;
-            let inactivityTimer, trackNotificationTimer, volumeNotificationTimer, panelHideTimer;
-            let showRemainingTime = false;
-            let currentHoverPercent = 0;
+    </div><!-- #content -->
+</div><!-- #shell -->
 
-            const elements = {
-                appContainer: document.getElementById('app-container'),
-                localFileSection: document.getElementById('local-file-section'),
-                videoPlayerSection: document.getElementById('video-player-section'),
-                videoContainer: document.getElementById('video-container'),
-                videoTitle: document.getElementById('video-title'),
-                playPauseBtn: document.getElementById('play-pause-btn'),
-                progressBar: document.getElementById('progress-bar'),
-                progressTooltip: document.getElementById('progress-tooltip'),
-                tooltipTime: document.getElementById('tooltip-time'),
-                currentTimeDisplay: document.getElementById('current-time'),
-                totalTimeDisplay: document.getElementById('total-time'),
-                fullscreenBtn: document.getElementById('fullscreen-btn'),
-                backBtn: document.getElementById('back-btn'),
-                openFileBtn: document.getElementById('open-file-btn'),
-                nextBtn: document.getElementById('next-btn'),
-                prevBtn: document.getElementById('prev-btn'),
-                lockBtn: document.getElementById('lock-btn'),
-                muteBtn: document.getElementById('mute-btn'),
-                speedBtn: document.getElementById('speed-btn'),
-                speedPanel: document.getElementById('speed-panel'),
-                speedDisplayText: document.getElementById('speed-display-text'),
-                speedSlider: document.getElementById('speed-slider'),
-                unlockBtn: document.getElementById('unlock-btn'),
-                seekBackward10Btn: document.getElementById('seek-backward-10-btn'),
-                seekForward10Btn: document.getElementById('seek-forward-10-btn'),
-                audioTracksBtn: document.getElementById('audio-tracks-btn'),
-                audioTracksPanel: document.getElementById('audio-tracks-panel'),
-                audioTracksList: document.getElementById('audio-tracks-list'),
-                subtitleTracksBtn: document.getElementById('subtitle-tracks-btn'),
-                subtitleTracksPanel: document.getElementById('subtitle-tracks-panel'),
-                subtitleTracksList: document.getElementById('subtitle-tracks-list'),
-                customSubtitleBtn: document.getElementById('custom-subtitle-btn'),
-                trackNotification: document.getElementById('track-notification'),
-                volumeNotification: document.getElementById('volume-notification'),
-                volumeIcon: document.getElementById('volume-icon'),
-                volumeLevel: document.getElementById('volume-level'),
-                dropZone: document.getElementById('drop-zone'),
-                thumbImg: document.getElementById('thumb-img'),
-            };
+<script>
+document.addEventListener('DOMContentLoaded', () => {
 
-            window.addEventListener('dragover', (e) => { e.preventDefault(); elements.dropZone.classList.add('border-blue-500', 'bg-gray-800/60'); });
-            window.addEventListener('dragleave', (e) => { e.preventDefault(); elements.dropZone.classList.remove('border-blue-500', 'bg-gray-800/60'); });
-            window.addEventListener('drop', (e) => { e.preventDefault(); elements.dropZone.classList.remove('border-blue-500', 'bg-gray-800/60'); });
+    // ── State ────────────────────────────────────────────────────────────────
+    let backend;
+    let playlist          = [];
+    let currentVideoIndex = 0;
+    let totalDurationMs   = 0;
+    let isFullscreen      = false;
+    let isMaximized       = false;
+    let showRemainingTime = false;
+    let currentHoverPercent = 0;
+    let inactivityTimer, trackNotifTimer, volumeNotifTimer, panelHideTimer;
 
-            document.querySelectorAll('.controls-bar').forEach(bar => {
-                bar.addEventListener('dblclick', (e) => e.stopPropagation());
-            });
+    // ── Element cache ────────────────────────────────────────────────────────
+    const el = {
+        shell:              document.getElementById('shell'),
+        barTitle:           document.getElementById('bar-title'),
+        winMinBtn:          document.getElementById('win-min-btn'),
+        winMaxBtn:          document.getElementById('win-max-btn'),
+        winCloseBtn:        document.getElementById('win-close-btn'),
+        maxIcon:            document.getElementById('max-icon'),
+        titleBar:           document.getElementById('title-bar'),
+        content:            document.getElementById('content'),
+        localFileSection:   document.getElementById('local-file-section'),
+        videoPlayerSection: document.getElementById('video-player-section'),
+        videoContainer:     document.getElementById('video-container'),
+        videoTitle:         document.getElementById('video-title'),
+        playPauseBtn:       document.getElementById('play-pause-btn'),
+        progressBar:        document.getElementById('progress-bar'),
+        progressTooltip:    document.getElementById('progress-tooltip'),
+        tooltipTime:        document.getElementById('tooltip-time'),
+        currentTimeDisplay: document.getElementById('current-time'),
+        totalTimeDisplay:   document.getElementById('total-time'),
+        fullscreenBtn:      document.getElementById('fullscreen-btn'),
+        backBtn:            document.getElementById('back-btn'),
+        openFileBtn:        document.getElementById('open-file-btn'),
+        nextBtn:            document.getElementById('next-btn'),
+        prevBtn:            document.getElementById('prev-btn'),
+        lockBtn:            document.getElementById('lock-btn'),
+        muteBtn:            document.getElementById('mute-btn'),
+        speedBtn:           document.getElementById('speed-btn'),
+        speedPanel:         document.getElementById('speed-panel'),
+        speedDisplayText:   document.getElementById('speed-display-text'),
+        speedSlider:        document.getElementById('speed-slider'),
+        unlockBtn:          document.getElementById('unlock-btn'),
+        seekBackward10Btn:  document.getElementById('seek-backward-10-btn'),
+        seekForward10Btn:   document.getElementById('seek-forward-10-btn'),
+        audioTracksBtn:     document.getElementById('audio-tracks-btn'),
+        audioTracksPanel:   document.getElementById('audio-tracks-panel'),
+        audioTracksList:    document.getElementById('audio-tracks-list'),
+        subtitleTracksBtn:  document.getElementById('subtitle-tracks-btn'),
+        subtitleTracksPanel:document.getElementById('subtitle-tracks-panel'),
+        subtitleTracksList: document.getElementById('subtitle-tracks-list'),
+        customSubtitleBtn:  document.getElementById('custom-subtitle-btn'),
+        trackNotification:  document.getElementById('track-notification'),
+        volumeNotification: document.getElementById('volume-notification'),
+        volumeIcon:         document.getElementById('volume-icon'),
+        volumeLevel:        document.getElementById('volume-level'),
+        dropZone:           document.getElementById('drop-zone'),
+        thumbImg:           document.getElementById('thumb-img'),
+    };
 
-            new QWebChannel(qt.webChannelTransport, function(channel) {
-                backend = channel.objects.backend;
-                
-                backend.files_selected.connect(onFilesSelected);
-                backend.time_updated.connect(onTimeUpdated);
-                backend.state_changed.connect(onStateChanged);
-                backend.tracks_populated.connect(buildTrackUI);
-                
-                backend.video_ended.connect(() => playFileFromPlaylist(currentVideoIndex + 1));
-                
-                backend.thumbnail_ready.connect((timeSec, b64Url) => {
-                    if (Math.abs((totalDurationMs * currentHoverPercent / 1000) - timeSec) < 2.0) {
-                        elements.thumbImg.src = b64Url;
-                        elements.thumbImg.classList.remove('hidden');
-                    }
-                });
-                
-                elements.openFileBtn.onclick = () => backend.openFileDialog();
-                elements.playPauseBtn.onclick = () => backend.togglePlay();
-                elements.fullscreenBtn.onclick = () => { backend.toggleFullscreen(); elements.appContainer.classList.toggle('is-fullscreen'); };
-                elements.progressBar.oninput = (e) => backend.seek(e.target.value / 100.0);
-                elements.customSubtitleBtn.onclick = () => backend.openSubtitleDialog();
-            });
+    // ── Helpers ──────────────────────────────────────────────────────────────
+    const formatTime = (ms) => {
+        const s = Math.max(0, Math.floor(ms / 1000));
+        const h = Math.floor(s / 3600);
+        const m = Math.floor((s % 3600) / 60);
+        const sec = s % 60;
+        const mm = String(m).padStart(2,'0');
+        const ss = String(sec).padStart(2,'0');
+        return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+    };
 
-            const showTrackNotification = (message) => {
-                clearTimeout(trackNotificationTimer);
-                elements.volumeNotification.style.opacity = '0';
-                elements.trackNotification.textContent = message;
-                elements.trackNotification.style.opacity = '1';
-                trackNotificationTimer = setTimeout(() => elements.trackNotification.style.opacity = '0', 1500);
-            };
-            
-            const showVolumeNotification = (volume) => {
-                clearTimeout(volumeNotificationTimer);
-                elements.trackNotification.style.opacity = '0';
-                if (volume === 0) elements.volumeIcon.className = 'fas fa-volume-mute';
-                else if (volume < 50) elements.volumeIcon.className = 'fas fa-volume-down';
-                else elements.volumeIcon.className = 'fas fa-volume-up';
-                
-                elements.volumeLevel.textContent = `${volume}%`;
-                elements.volumeNotification.style.opacity = '1';
-                volumeNotificationTimer = setTimeout(() => elements.volumeNotification.style.opacity = '0', 1500);
-            };
+    const showTrackNotification = (msg) => {
+        clearTimeout(trackNotifTimer);
+        el.volumeNotification.style.opacity = '0';
+        el.trackNotification.textContent = msg;
+        el.trackNotification.style.opacity = '1';
+        trackNotifTimer = setTimeout(() => el.trackNotification.style.opacity = '0', 1500);
+    };
 
-            const hideControls = () => { elements.videoContainer.classList.add('inactive'); };
-            const resetInactivityTimer = () => {
-                elements.videoContainer.classList.remove('inactive');
-                clearTimeout(inactivityTimer);
-                inactivityTimer = setTimeout(hideControls, 1500);
-            };
+    const showVolumeNotification = (volume) => {
+        clearTimeout(volumeNotifTimer);
+        el.trackNotification.style.opacity = '0';
+        el.volumeIcon.className = volume === 0 ? 'fas fa-volume-mute' : volume < 50 ? 'fas fa-volume-down' : 'fas fa-volume-up';
+        el.volumeLevel.textContent = `${volume}%`;
+        el.volumeNotification.style.opacity = '1';
+        volumeNotifTimer = setTimeout(() => el.volumeNotification.style.opacity = '0', 1500);
+    };
 
-            const toggleMuteState = () => {
-                backend.toggleMute().then(isMuted => {
-                    showTrackNotification(isMuted ? "Muted" : "Unmuted");
-                    const iconClass = isMuted ? 'fas fa-volume-mute' : 'fas fa-volume-up';
-                    elements.volumeIcon.className = iconClass;
-                    elements.muteBtn.innerHTML = `<i class="${iconClass}"></i>`;
-                });
-            };
-            elements.muteBtn.onclick = toggleMuteState;
+    const hideControls = () => el.videoContainer.classList.add('inactive');
+    const resetInactivityTimer = () => {
+        el.videoContainer.classList.remove('inactive');
+        clearTimeout(inactivityTimer);
+        inactivityTimer = setTimeout(hideControls, 1500);
+    };
 
-            const updateSpeedUI = (speed) => {
-                elements.speedBtn.textContent = speed === 1 ? '1x' : speed + 'x';
-                elements.speedSlider.value = speed;
-                elements.speedDisplayText.textContent = speed + 'x';
-                document.querySelectorAll('.speed-preset').forEach(b => {
-                    if (parseFloat(b.dataset.speed) === speed) {
-                        b.classList.add('active', 'bg-blue-600', 'text-white');
-                        b.classList.remove('bg-gray-700/40', 'text-gray-200');
-                    } else {
-                        b.classList.remove('active', 'bg-blue-600', 'text-white');
-                        b.classList.add('bg-gray-700/40', 'text-gray-200');
-                    }
-                });
-            };
+    const closeAllPanels = () => {
+        [el.audioTracksPanel, el.subtitleTracksPanel, el.speedPanel].forEach(p => p.classList.remove('open'));
+    };
 
-            document.querySelectorAll('.speed-preset').forEach(btn => {
-                btn.onclick = (e) => {
-                    let speed = parseFloat(btn.dataset.speed);
-                    backend.setRate(speed);
-                    updateSpeedUI(speed);
-                    showTrackNotification("Speed: " + speed + "x");
-                }
-            });
+    // ── Fullscreen UI ────────────────────────────────────────────────────────
+    const setFullscreenUI = (on) => {
+        isFullscreen = on;
+        el.shell.classList.toggle('fullscreen', on);
+        el.fullscreenBtn.innerHTML = on
+            ? '<i class="fas fa-compress-arrows-alt"></i>'
+            : '<i class="fas fa-expand-arrows-alt"></i>';
+    };
 
-            elements.speedSlider.oninput = (e) => {
-                let speed = parseFloat(e.target.value);
-                backend.setRate(speed);
-                updateSpeedUI(speed);
-            };
-            elements.speedSlider.onchange = (e) => { showTrackNotification("Speed: " + e.target.value + "x"); };
+    // ── Maximize icon ────────────────────────────────────────────────────────
+    const updateMaxIcon = () => {
+        el.maxIcon.innerHTML = isMaximized
+            ? '<rect x="2" y="0" width="8" height="8" fill="none" stroke="currentColor" stroke-width="1"/><rect x="0" y="2" width="8" height="8" fill="none" stroke="currentColor" stroke-width="1"/>'
+            : '<rect x="0.5" y="0.5" width="9" height="9" fill="none" stroke="currentColor" stroke-width="1"/>';
+    };
 
-            const onFilesSelected = (filePaths) => {
-                playlist = playlist.concat(filePaths);
-                if (playlist.length > 0) playFileFromPlaylist(0);
-            };
-
-            const playFileFromPlaylist = (index) => {
-                if (index < 0 || index >= playlist.length) return;
-                currentVideoIndex = index;
-                const filePath = playlist[currentVideoIndex];
-
-                elements.localFileSection.classList.add('hidden');
-                elements.videoPlayerSection.classList.remove('hidden');
-                elements.appContainer.classList.add('playing'); 
-                
-                elements.videoTitle.textContent = filePath.replace(/^.*[\\\/]/, '');
-                elements.prevBtn.style.opacity = currentVideoIndex === 0 ? '0.5' : '1';
-                elements.nextBtn.style.opacity = currentVideoIndex >= playlist.length - 1 ? '0.5' : '1';
-                
-                elements.audioTracksList.innerHTML = '<div class="text-gray-400 p-3 text-sm">Loading...</div>';
-                elements.subtitleTracksList.innerHTML = '<div class="text-gray-400 p-3 text-sm">Loading...</div>';
-                
-                backend.playFile(filePath);
-            };
-
-            const onStateChanged = (isPlaying) => {
-                elements.playPauseBtn.innerHTML = isPlaying ? `<i class="fas fa-pause-circle"></i>` : `<i class="fas fa-play-circle"></i>`;
-                if(isPlaying) resetInactivityTimer();
-                else { clearTimeout(inactivityTimer); elements.videoContainer.classList.remove('inactive'); }
-            };
-
-            const formatTime = (ms) => {
-                const totalSeconds = Math.floor(ms / 1000);
-                const hours = Math.floor(totalSeconds / 3600);
-                const minutes = Math.floor((totalSeconds % 3600) / 60);
-                const seconds = Math.floor(totalSeconds % 60);
-                if (hours > 0) return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-                return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-            };
-
-            const onTimeUpdated = (currentMs, totalMs) => {
-                totalDurationMs = totalMs;
-                elements.progressBar.value = (currentMs / totalMs) * 100;
-                elements.currentTimeDisplay.textContent = formatTime(currentMs);
-                elements.totalTimeDisplay.textContent = showRemainingTime ? `-${formatTime(totalMs - currentMs)}` : formatTime(totalMs);
-            };
-
-            const buildTrackUI = (audioTracks, subtitleTracks, currentAudio, currentSub) => {
-                elements.audioTracksList.innerHTML = '';
-                audioTracks.forEach(stream => {
-                    const btn = document.createElement('button');
-                    btn.className = `w-full text-left font-medium text-gray-200 bg-gray-700/40 p-2.5 rounded-lg mb-1.5 hover:bg-gray-600 transition track-button ${stream.id === currentAudio ? 'active' : ''}`;
-                    btn.textContent = stream.name || `Track ${stream.id}`;
-                    btn.onclick = (e) => { 
-                        document.querySelectorAll('#audio-tracks-list .track-button').forEach(b => b.classList.remove('active'));
-                        e.currentTarget.classList.add('active');
-                        backend.setAudioTrack(stream.id); 
-                        showTrackNotification(btn.textContent); 
-                    };
-                    elements.audioTracksList.appendChild(btn);
-                });
-
-                elements.subtitleTracksList.innerHTML = '';
-                const offBtn = document.createElement('button');
-                offBtn.className = `w-full text-left font-medium text-gray-200 bg-gray-700/40 p-2.5 rounded-lg mb-1.5 hover:bg-gray-600 transition track-button ${currentSub === -1 ? 'active' : ''}`;
-                offBtn.textContent = 'Off';
-                offBtn.onclick = (e) => { 
-                    document.querySelectorAll('#subtitle-tracks-list .track-button').forEach(b => b.classList.remove('active'));
-                    e.currentTarget.classList.add('active');
-                    backend.setSubtitleTrack(-1); 
-                    showTrackNotification('Subtitles Off'); 
-                };
-                elements.subtitleTracksList.appendChild(offBtn);
-                
-                subtitleTracks.forEach(stream => {
-                    const btn = document.createElement('button');
-                    btn.className = `w-full text-left font-medium text-gray-200 bg-gray-700/40 p-2.5 rounded-lg mb-1.5 hover:bg-gray-600 transition track-button ${stream.id === currentSub ? 'active' : ''}`;
-                    btn.textContent = stream.name || `Track ${stream.id}`;
-                    btn.onclick = (e) => { 
-                        document.querySelectorAll('#subtitle-tracks-list .track-button').forEach(b => b.classList.remove('active'));
-                        e.currentTarget.classList.add('active');
-                        backend.setSubtitleTrack(stream.id); 
-                        showTrackNotification(btn.textContent); 
-                    };
-                    elements.subtitleTracksList.appendChild(btn);
-                });
-            };
-
-            const cycleTracks = (selector) => {
-                const buttons = Array.from(document.querySelectorAll(selector));
-                if (buttons.length <= 1) return;
-                let currentIndex = buttons.findIndex(btn => btn.classList.contains('active'));
-                if (currentIndex === -1) currentIndex = 0;
-                const nextIndex = (currentIndex + 1) % buttons.length;
-                buttons[nextIndex].click();
-            };
-
-            elements.progressBar.addEventListener('mousemove', (e) => {
-                if(totalDurationMs === 0) return;
-                const rect = elements.progressBar.getBoundingClientRect();
-                
-                let percent = (e.clientX - rect.left) / rect.width;
-                percent = Math.max(0, Math.min(1, percent)); 
-                currentHoverPercent = percent;
-                
-                let tooltipX = Math.max(0, Math.min(rect.width, e.clientX - rect.left)); 
-                
-                elements.progressTooltip.style.left = `${tooltipX}px`;
-                elements.tooltipTime.textContent = formatTime(totalDurationMs * percent);
-                elements.progressTooltip.style.display = 'flex';
-                
-                let timeSec = (totalDurationMs * percent) / 1000;
-                backend.requestThumbnail(timeSec);
-            });
-            
-            elements.progressBar.addEventListener('mouseleave', () => {
-                elements.progressTooltip.style.display = 'none';
-                elements.thumbImg.classList.add('hidden'); 
-            });
-            
-            elements.totalTimeDisplay.addEventListener('click', () => showRemainingTime = !showRemainingTime);
-
-            elements.backBtn.addEventListener('click', () => {
-                elements.videoPlayerSection.classList.add('hidden');
-                elements.localFileSection.classList.remove('hidden');
-                elements.appContainer.classList.remove('playing');
-                backend.stopPlay(); 
-                playlist = [];
-            });
-            
-            const seekRelative = (ms) => {
-                if(totalDurationMs === 0) return;
-                let currentMs = totalDurationMs * (elements.progressBar.value / 100);
-                let targetMs = currentMs + ms;
-                let percent = Math.max(0, Math.min(1, targetMs / totalDurationMs));
-                backend.seek(percent);
-            };
-
-            elements.nextBtn.addEventListener('click', () => playFileFromPlaylist(currentVideoIndex + 1));
-            elements.prevBtn.addEventListener('click', () => playFileFromPlaylist(currentVideoIndex - 1));
-            elements.seekBackward10Btn.addEventListener('click', () => seekRelative(-10000));
-            elements.seekForward10Btn.addEventListener('click', () => seekRelative(10000));
-
-            const setupHoverPanel = (btn, panel) => {
-                btn.addEventListener('mouseenter', () => {
-                    [elements.audioTracksPanel, elements.subtitleTracksPanel, elements.speedPanel].forEach(p => p.classList.remove('open'));
-                    clearTimeout(panelHideTimer);
-                    panel.classList.add('open');
-                });
-                btn.addEventListener('mouseleave', () => {
-                    panelHideTimer = setTimeout(() => panel.classList.remove('open'), 300);
-                });
-                panel.addEventListener('mouseenter', () => clearTimeout(panelHideTimer));
-                panel.addEventListener('mouseleave', () => {
-                    panelHideTimer = setTimeout(() => panel.classList.remove('open'), 300);
-                });
-            };
-
-            setupHoverPanel(elements.audioTracksBtn, elements.audioTracksPanel);
-            setupHoverPanel(elements.subtitleTracksBtn, elements.subtitleTracksPanel);
-            setupHoverPanel(elements.speedBtn, elements.speedPanel);
-
-            elements.videoContainer.addEventListener('click', (e) => {
-                if (!e.target.closest('.controls-bar') && !e.target.closest('.floating-panel')) {
-                    elements.audioTracksPanel.classList.remove('open');
-                    elements.subtitleTracksPanel.classList.remove('open');
-                    elements.speedPanel.classList.remove('open');
-                }
-            });
-            
-            elements.lockBtn.addEventListener('click', (e) => { e.stopPropagation(); elements.videoContainer.classList.add('locked'); resetInactivityTimer(); });
-            elements.unlockBtn.addEventListener('click', (e) => { e.stopPropagation(); elements.videoContainer.classList.remove('locked'); resetInactivityTimer(); });
-            elements.videoContainer.addEventListener('mousemove', resetInactivityTimer);
-            elements.videoContainer.addEventListener('mouseleave', hideControls);
-            
-            elements.progressBar.addEventListener('mouseup', () => elements.progressBar.blur());
-            elements.speedSlider.addEventListener('mouseup', () => elements.speedSlider.blur());
-            
-            document.addEventListener('keydown', (e) => {
-                if ((e.target.tagName === 'INPUT' && e.target.type !== 'range') || elements.localFileSection.classList.contains('hidden') === false) return;
-                if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) e.preventDefault();
-                
-                switch (e.key.toLowerCase()) {
-                    case 'f': backend.toggleFullscreen(); elements.appContainer.classList.toggle('is-fullscreen'); break;
-                    case ' ': backend.togglePlay(); break;
-                    case 'arrowright': seekRelative(5000); break;
-                    case 'arrowleft': seekRelative(-5000); break;
-                    case 'arrowup': backend.changeVolume(0.05).then(showVolumeNotification); break;
-                    case 'arrowdown': backend.changeVolume(-0.05).then(showVolumeNotification); break;
-                    case 'b': cycleTracks('#audio-tracks-list .track-button'); break;
-                    case 'v': cycleTracks('#subtitle-tracks-list .track-button'); break;
-                    case 'j': backend.seekRelative(-1000); break;
-                    case 'k': backend.togglePlay(); break;
-                    case 'l': backend.seekRelative(1000); break;
-                    case 'm': toggleMuteState(); break;
-                    case ',':
-                    case '<': backend.seekFrame(-1); break;
-                    case '.':
-                    case '>': backend.seekFrame(1); break;
-                }
-            });
-            elements.videoContainer.addEventListener('dblclick', () => { backend.toggleFullscreen(); elements.appContainer.classList.toggle('is-fullscreen'); });
+    // ── Speed UI ─────────────────────────────────────────────────────────────
+    const updateSpeedUI = (speed) => {
+        const label = speed === 1 ? '1x' : `${speed}x`;
+        el.speedBtn.textContent = label;
+        el.speedSlider.value = speed;
+        el.speedDisplayText.textContent = label;
+        document.querySelectorAll('.speed-preset').forEach(b => {
+            const match = parseFloat(b.dataset.speed) === speed;
+            b.classList.toggle('active', match);
+            b.classList.toggle('bg-blue-600', match);
+            b.classList.toggle('text-white', match);
+            b.classList.toggle('bg-gray-700/40', !match);
+            b.classList.toggle('text-gray-200', !match);
         });
-    </script>
+    };
+
+    // ── Subtitle list rebuild (used for both initial load and custom subtitle) ─
+    const buildSubtitleList = (subtitleTracks, currentSub) => {
+        el.subtitleTracksList.innerHTML = '';
+        const makeSubBtn = (id, label) => {
+            const btn = document.createElement('button');
+            btn.className = `w-full text-left font-medium text-gray-200 bg-gray-700/40 p-2.5 rounded-lg mb-1.5 hover:bg-gray-600 transition track-button${id === currentSub ? ' active' : ''}`;
+            btn.textContent = label;
+            btn.onclick = () => {
+                el.subtitleTracksList.querySelectorAll('.track-button').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                backend.setSubtitleTrack(id);
+                showTrackNotification(label);
+            };
+            return btn;
+        };
+        el.subtitleTracksList.appendChild(makeSubBtn(-1, 'Off'));
+        subtitleTracks.forEach(s => el.subtitleTracksList.appendChild(makeSubBtn(s.id, s.name || `Track ${s.id}`)));
+    };
+
+    // ── Track UI ─────────────────────────────────────────────────────────────
+    const buildTrackUI = (audioTracks, subtitleTracks, currentAudio, currentSub) => {
+        el.audioTracksList.innerHTML = '';
+        audioTracks.forEach(s => {
+            const btn = document.createElement('button');
+            btn.className = `w-full text-left font-medium text-gray-200 bg-gray-700/40 p-2.5 rounded-lg mb-1.5 hover:bg-gray-600 transition track-button${s.id === currentAudio ? ' active' : ''}`;
+            btn.textContent = s.name || `Track ${s.id}`;
+            btn.onclick = () => {
+                el.audioTracksList.querySelectorAll('.track-button').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                backend.setAudioTrack(s.id);
+                showTrackNotification(btn.textContent);
+            };
+            el.audioTracksList.appendChild(btn);
+        });
+        buildSubtitleList(subtitleTracks, currentSub);
+    };
+
+    // ── Playlist / playback ───────────────────────────────────────────────────
+    const playFileFromPlaylist = (index) => {
+        if (index < 0 || index >= playlist.length) return;
+        currentVideoIndex = index;
+        const filePath = playlist[index];
+        const fileName = filePath.replace(/^.*[\\\/]/, '');
+
+        el.localFileSection.classList.add('hidden');
+        el.videoPlayerSection.classList.remove('hidden');
+        el.shell.classList.add('playing');
+
+        el.videoTitle.textContent = fileName;
+        el.barTitle.textContent   = fileName;
+        el.prevBtn.style.opacity  = index === 0 ? '0.4' : '1';
+        el.nextBtn.style.opacity  = index >= playlist.length - 1 ? '0.4' : '1';
+
+        el.audioTracksList.innerHTML   = '<div class="text-gray-400 p-3 text-sm">Loading...</div>';
+        el.subtitleTracksList.innerHTML = '<div class="text-gray-400 p-3 text-sm">Loading...</div>';
+
+        // Reset speed to 1x for each new video
+        updateSpeedUI(1.0);
+        backend.setRate(1.0);
+
+        backend.playFile(filePath);
+    };
+
+    const onFilesSelected = (filePaths) => {
+        const wasEmpty = playlist.length === 0;
+        // Deduplicate: only add files not already in playlist
+        const newFiles = filePaths.filter(f => !playlist.includes(f));
+        playlist = playlist.concat(newFiles);
+        if (wasEmpty && playlist.length > 0) {
+            playFileFromPlaylist(0);
+        }
+        // If already playing, new files are queued — next/prev will reach them
+    };
+
+    const cycleTracks = (listEl) => {
+        const buttons = Array.from(listEl.querySelectorAll('.track-button'));
+        if (buttons.length <= 1) return;
+        let idx = buttons.findIndex(b => b.classList.contains('active'));
+        if (idx === -1) idx = 0;
+        buttons[(idx + 1) % buttons.length].click();
+    };
+
+    // ── Signal handlers ───────────────────────────────────────────────────────
+    const onStateChanged = (isPlaying) => {
+        el.playPauseBtn.innerHTML = isPlaying
+            ? '<i class="fas fa-pause-circle"></i>'
+            : '<i class="fas fa-play-circle"></i>';
+        if (isPlaying) resetInactivityTimer();
+        else { clearTimeout(inactivityTimer); el.videoContainer.classList.remove('inactive'); }
+    };
+
+    const onTimeUpdated = (currentMs, totalMs) => {
+        if (totalMs <= 0) return;
+        totalDurationMs = totalMs;
+        el.progressBar.value = (currentMs / totalMs) * 100;
+        el.currentTimeDisplay.textContent = formatTime(currentMs);
+        el.totalTimeDisplay.textContent   = showRemainingTime
+            ? `-${formatTime(totalMs - currentMs)}`
+            : formatTime(totalMs);
+    };
+
+    // ── QWebChannel init ──────────────────────────────────────────────────────
+    new QWebChannel(qt.webChannelTransport, (channel) => {
+        backend = channel.objects.backend;
+
+        backend.files_selected.connect(onFilesSelected);
+        backend.time_updated.connect(onTimeUpdated);
+        backend.state_changed.connect(onStateChanged);
+        backend.tracks_populated.connect(buildTrackUI);
+        backend.video_ended.connect(() => playFileFromPlaylist(currentVideoIndex + 1));
+
+        backend.thumbnail_ready.connect((timeSec, b64Url) => {
+            const hoverSec = totalDurationMs * currentHoverPercent / 1000;
+            if (Math.abs(hoverSec - timeSec) < 2.0) {
+                el.thumbImg.src = b64Url;
+                el.thumbImg.classList.remove('hidden');
+            }
+        });
+
+        // NEW: subtitle_added signal — rebuild only the subtitle list
+        backend.subtitle_added.connect((jsonStr) => {
+            const data = JSON.parse(jsonStr);
+            buildSubtitleList(data.subs, data.current);
+            showTrackNotification('Custom subtitle loaded');
+        });
+
+        el.openFileBtn.onclick        = () => backend.openFileDialog();
+        el.dropZone.onclick           = () => backend.openFileDialog();
+        el.playPauseBtn.onclick       = () => backend.togglePlay();
+        el.progressBar.oninput        = (e) => backend.seek(parseFloat(e.target.value) / 100.0);
+        el.customSubtitleBtn.onclick  = () => backend.openSubtitleDialog();
+
+        el.fullscreenBtn.onclick = () => {
+            backend.toggleFullscreen();
+            setFullscreenUI(!isFullscreen);
+        };
+    });
+
+    // ── Window chrome ─────────────────────────────────────────────────────────
+    el.winMinBtn.onclick   = () => backend && backend.minimizeWindow();
+    el.winCloseBtn.onclick = () => backend && backend.closeWindow();
+    el.winMaxBtn.onclick   = () => {
+        if (!backend) return;
+        isMaximized = !isMaximized;
+        updateMaxIcon();
+        backend.maximizeWindow();
+    };
+    // Double-click title bar = maximize
+    el.titleBar.addEventListener('dblclick', (e) => {
+        if (e.target.closest('.win-btns')) return;
+        if (!backend) return;
+        isMaximized = !isMaximized;
+        updateMaxIcon();
+        backend.maximizeWindow();
+    });
+    // Drag to move
+    el.titleBar.addEventListener('mousedown', (e) => {
+        if (e.button !== 0 || e.target.closest('.win-btns') || isFullscreen || isMaximized || !backend) return;
+        backend.startDrag(e.screenX, e.screenY);
+        const onMove = (me) => backend.doDrag(me.screenX, me.screenY);
+        const onUp   = ()   => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+        window.addEventListener('mousemove', onMove);
+        window.addEventListener('mouseup',   onUp);
+    });
+
+    // ── Back button ───────────────────────────────────────────────────────────
+    el.backBtn.addEventListener('click', () => {
+        el.videoPlayerSection.classList.add('hidden');
+        el.localFileSection.classList.remove('hidden');
+        el.shell.classList.remove('playing');
+        el.barTitle.textContent = 'MX Player';   // reset title bar
+        el.videoTitle.textContent = '';
+        totalDurationMs = 0;
+        el.progressBar.value = 0;
+        el.currentTimeDisplay.textContent = '00:00';
+        el.totalTimeDisplay.textContent   = '00:00';
+        playlist = [];
+        currentVideoIndex = 0;
+        if (isFullscreen) { backend && backend.toggleFullscreen(); setFullscreenUI(false); }
+        backend && backend.stopPlay();
+    });
+
+    // ── Progress bar ──────────────────────────────────────────────────────────
+    const hideTooltip = () => {
+        el.progressTooltip.style.display = 'none';
+        el.thumbImg.classList.add('hidden');
+    };
+
+    el.progressBar.addEventListener('mousemove', (e) => {
+        if (totalDurationMs === 0) return;
+        const rect = el.progressBar.getBoundingClientRect();
+        // Hide if mouse is outside the progress bar bounds
+        if (e.clientX < rect.left || e.clientX > rect.right ||
+            e.clientY < rect.top - 10 || e.clientY > rect.bottom + 10) {
+            hideTooltip();
+            return;
+        }
+        const percent = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+        currentHoverPercent = percent;
+        el.progressTooltip.style.left = `${e.clientX - rect.left}px`;
+        el.tooltipTime.textContent     = formatTime(totalDurationMs * percent);
+        el.progressTooltip.style.display = 'flex';
+        backend && backend.requestThumbnail((totalDurationMs * percent) / 1000);
+    });
+    el.progressBar.addEventListener('mouseleave', hideTooltip);
+    // Also hide when mouse leaves the wrapper area (catches drag-out)
+    el.progressBar.closest('.progress-bar-wrapper').addEventListener('mouseleave', hideTooltip);
+    el.progressBar.addEventListener('mouseup', () => el.progressBar.blur());
+    el.totalTimeDisplay.addEventListener('click', () => showRemainingTime = !showRemainingTime);
+
+    // ── Seek helpers ──────────────────────────────────────────────────────────
+    const seekRelative = (ms) => {
+        if (!backend || totalDurationMs === 0) return;
+        const currentMs = totalDurationMs * (el.progressBar.value / 100);
+        const percent   = Math.max(0, Math.min(1, (currentMs + ms) / totalDurationMs));
+        backend.seek(percent);
+    };
+
+    // ── Playback buttons ──────────────────────────────────────────────────────
+    el.nextBtn.addEventListener('click',            () => playFileFromPlaylist(currentVideoIndex + 1));
+    el.prevBtn.addEventListener('click',            () => playFileFromPlaylist(currentVideoIndex - 1));
+    el.seekBackward10Btn.addEventListener('click',  () => seekRelative(-10000));
+    el.seekForward10Btn.addEventListener('click',   () => seekRelative(10000));
+
+    // ── Mute ──────────────────────────────────────────────────────────────────
+    const toggleMuteState = () => {
+        if (!backend) return;
+        backend.toggleMute().then(isMuted => {
+            const cls = isMuted ? 'fas fa-volume-mute' : 'fas fa-volume-up';
+            el.muteBtn.innerHTML = `<i class="${cls}"></i>`;
+            showTrackNotification(isMuted ? 'Muted' : 'Unmuted');
+        });
+    };
+    el.muteBtn.onclick = toggleMuteState;
+
+    // ── Speed ─────────────────────────────────────────────────────────────────
+    document.querySelectorAll('.speed-preset').forEach(btn => {
+        btn.onclick = () => {
+            const speed = parseFloat(btn.dataset.speed);
+            backend && backend.setRate(speed);
+            updateSpeedUI(speed);
+            showTrackNotification(`Speed: ${speed}x`);
+        };
+    });
+    el.speedSlider.oninput  = (e) => { const s = parseFloat(e.target.value); backend && backend.setRate(s); updateSpeedUI(s); };
+    el.speedSlider.onchange = (e) => showTrackNotification(`Speed: ${parseFloat(e.target.value)}x`);
+    el.speedSlider.addEventListener('mouseup', () => el.speedSlider.blur());
+
+    // ── Lock ──────────────────────────────────────────────────────────────────
+    el.lockBtn.addEventListener('click',   (e) => { e.stopPropagation(); el.videoContainer.classList.add('locked');    resetInactivityTimer(); });
+    el.unlockBtn.addEventListener('click', (e) => { e.stopPropagation(); el.videoContainer.classList.remove('locked'); resetInactivityTimer(); });
+
+    // ── Inactivity / mouse ────────────────────────────────────────────────────
+    el.videoContainer.addEventListener('mousemove', resetInactivityTimer);
+    el.videoContainer.addEventListener('mouseleave', hideControls);
+
+    // ── Floating panel hover logic ────────────────────────────────────────────
+    const setupHoverPanel = (btn, panel) => {
+        btn.addEventListener('mouseenter', () => { closeAllPanels(); clearTimeout(panelHideTimer); panel.classList.add('open'); });
+        btn.addEventListener('mouseleave', () => { panelHideTimer = setTimeout(() => panel.classList.remove('open'), 300); });
+        panel.addEventListener('mouseenter', () => clearTimeout(panelHideTimer));
+        panel.addEventListener('mouseleave', () => { panelHideTimer = setTimeout(() => panel.classList.remove('open'), 300); });
+    };
+    setupHoverPanel(el.audioTracksBtn,    el.audioTracksPanel);
+    setupHoverPanel(el.subtitleTracksBtn, el.subtitleTracksPanel);
+    setupHoverPanel(el.speedBtn,          el.speedPanel);
+
+    // Close panels on video click
+    el.videoContainer.addEventListener('click', (e) => {
+        if (!e.target.closest('.controls-bar') && !e.target.closest('.floating-panel')) closeAllPanels();
+    });
+
+    // Stop controls-bar double-click from triggering fullscreen
+    document.querySelectorAll('.controls-bar').forEach(b => b.addEventListener('dblclick', e => e.stopPropagation()));
+
+    // Double-click video = fullscreen
+    el.videoContainer.addEventListener('dblclick', () => {
+        if (!backend) return;
+        backend.toggleFullscreen();
+        setFullscreenUI(!isFullscreen);
+    });
+
+    // ── Drag & drop feedback (visual only — actual drop handled by Python) ────
+    window.addEventListener('dragover',  (e) => { e.preventDefault(); el.dropZone.classList.add('border-blue-500','bg-gray-800/60'); });
+    window.addEventListener('dragleave', (e) => { e.preventDefault(); el.dropZone.classList.remove('border-blue-500','bg-gray-800/60'); });
+    window.addEventListener('drop',      (e) => { e.preventDefault(); el.dropZone.classList.remove('border-blue-500','bg-gray-800/60'); });
+
+    // ── Keyboard shortcuts ────────────────────────────────────────────────────
+    document.addEventListener('keydown', (e) => {
+        // Ignore if home screen is visible (localFileSection does NOT have 'hidden' class)
+        if (!el.localFileSection.classList.contains('hidden')) return;
+        if (e.target.tagName === 'INPUT' && e.target.type !== 'range') return;
+        if (!backend) return;
+
+        if ([' ','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)) e.preventDefault();
+
+        switch (e.key.toLowerCase()) {
+            case 'f':
+                backend.toggleFullscreen();
+                setFullscreenUI(!isFullscreen);
+                break;
+            case ' ':  case 'k': backend.togglePlay(); break;
+            case 'arrowright':   seekRelative(5000);   break;
+            case 'arrowleft':    seekRelative(-5000);  break;
+            case 'arrowup':      backend.changeVolume(0.05).then(showVolumeNotification);  break;
+            case 'arrowdown':    backend.changeVolume(-0.05).then(showVolumeNotification); break;
+            case 'b':  cycleTracks(el.audioTracksList);    break;
+            case 'v':  cycleTracks(el.subtitleTracksList); break;
+            case 'j':  backend.seekRelative(-1000); break;
+            case 'l':  backend.seekRelative(1000);  break;
+            case 'm':  toggleMuteState(); break;
+            case ',':  case '<': backend.seekFrame(-1); break;
+            case '.':  case '>': backend.seekFrame(1);  break;
+        }
+    });
+
+});
+</script>
 </body>
 </html>
