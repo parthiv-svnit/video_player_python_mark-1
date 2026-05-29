@@ -204,7 +204,7 @@
             -webkit-backdrop-filter: blur(24px) saturate(180%);
             border: 1px solid rgba(255,255,255,0.18); color: white;
             padding: 8px; border-radius: 16px; font-size: 13px;
-            pointer-events: none; transform: translateX(-50%);
+            pointer-events: none;
             display: none;
             box-shadow: 0 8px 32px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.15);
             flex-direction: column; align-items: center;
@@ -307,7 +307,7 @@
                 <div class="controls-bar bottom-controls bottom-controls-gradient w-full absolute bottom-0 left-0 p-4 z-20">
                     <div class="w-full mb-3 progress-bar-wrapper">
                         <div id="progress-tooltip" class="flex flex-col items-center">
-                            <img id="thumb-img" class="hidden object-cover" width="160" height="90" style="min-width:160px;min-height:90px;border-radius:10px;box-shadow:0 2px 12px rgba(0,0,0,0.6);border:1px solid rgba(255,255,255,0.1);">
+                            <img id="thumb-img" class="hidden" width="320" height="180" style="width:160px;height:90px;border-radius:10px;box-shadow:0 2px 12px rgba(0,0,0,0.6);border:1px solid rgba(255,255,255,0.1);">
                             <span id="tooltip-time" class="font-mono font-semibold" style="text-shadow:0 1px 4px rgba(0,0,0,0.9);letter-spacing:0.06em;font-size:12px;color:rgba(255,255,255,0.92);"></span>
                         </div>
                         <div class="flex justify-between items-center text-xs font-mono text-white px-1 mb-1" style="text-shadow:0px 1px 2px rgba(0,0,0,0.8);">
@@ -376,7 +376,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let showRemainingTime = false;
     let videoHasEnded     = false;
     let currentHoverPercent = 0;
-    let inactivityTimer, trackNotifTimer, volumeNotifTimer, panelHideTimer;
+    let inactivityTimer, trackNotifTimer, volumeNotifTimer, panelHideTimer, isOverControls = false;
 
     // ── Element cache ────────────────────────────────────────────────────────
     const el = {
@@ -456,6 +456,7 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const hideControls = () => {
+        if (isOverControls) return;
         el.videoContainer.classList.add('inactive');
         document.body.style.cursor = 'none';
     };
@@ -704,7 +705,6 @@ document.addEventListener('DOMContentLoaded', () => {
     el.progressBar.addEventListener('mousemove', (e) => {
         if (totalDurationMs === 0) return;
         const rect = el.progressBar.getBoundingClientRect();
-        // Hide if mouse is outside the progress bar bounds
         if (e.clientX < rect.left || e.clientX > rect.right ||
             e.clientY < rect.top - 10 || e.clientY > rect.bottom + 10) {
             hideTooltip();
@@ -712,9 +712,16 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         const percent = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
         currentHoverPercent = percent;
-        el.progressTooltip.style.left = `${e.clientX - rect.left}px`;
-        el.tooltipTime.textContent     = formatTime(totalDurationMs * percent);
+        el.tooltipTime.textContent = formatTime(totalDurationMs * percent);
+
+        // Make visible before measuring — offsetWidth returns 0 when display:none
         el.progressTooltip.style.display = 'flex';
+        const tipW = el.progressTooltip.offsetWidth;
+        const rawLeft = e.clientX - rect.left;
+        // Compute left edge: center tooltip on cursor, then clamp so it stays fully inside the wrapper
+        const leftEdge = rawLeft - tipW / 2;
+        el.progressTooltip.style.left = `${Math.max(0, Math.min(rect.width - tipW, leftEdge))}px`;
+
         backend && backend.requestThumbnail((totalDurationMs * percent) / 1000);
     });
     el.progressBar.addEventListener('mouseleave', hideTooltip);
@@ -768,6 +775,18 @@ document.addEventListener('DOMContentLoaded', () => {
     // ── Inactivity / mouse ────────────────────────────────────────────────────
     el.videoContainer.addEventListener('mousemove', resetInactivityTimer);
     el.videoContainer.addEventListener('mouseleave', hideControls);
+    document.querySelectorAll('.controls-bar').forEach(bar => {
+        bar.addEventListener('mouseenter', () => {
+            isOverControls = true;
+            clearTimeout(inactivityTimer);
+            el.videoContainer.classList.remove('inactive');
+            document.body.style.cursor = '';
+        });
+        bar.addEventListener('mouseleave', () => {
+            isOverControls = false;
+            resetInactivityTimer();
+        });
+    });
 
     // ── Floating panel hover logic ────────────────────────────────────────────
     const setupHoverPanel = (btn, panel) => {

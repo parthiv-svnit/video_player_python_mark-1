@@ -75,6 +75,8 @@ class VideoBackend(QObject):
         self.last_thumb_time = -1
         self._custom_subs = []   # [{"name": str, "path": str}]
         self._custom_sub_id_base = 90000
+        self._is_muted = False   # ← add
+        self._current_proc = None   # ← add this
 
     @pyqtSlot()
     def openFileDialog(self):
@@ -201,9 +203,9 @@ class VideoBackend(QObject):
 
     @pyqtSlot(result=bool)
     def toggleMute(self):
-        is_muted = self.player.media_player.audio_get_mute() == 1
-        self.player.media_player.audio_set_mute(not is_muted)
-        return not is_muted
+        self._is_muted = not self._is_muted
+        self.player.media_player.audio_set_mute(self._is_muted)
+        return self._is_muted
 
     @pyqtSlot(float, result=int)
     def changeVolume(self, delta):
@@ -234,6 +236,63 @@ class VideoBackend(QObject):
     @pyqtSlot(float)
     def setRate(self, rate):
         self.player.media_player.set_rate(rate)
+
+    @pyqtSlot(float)
+    def requestThumbnail(self, time_sec):
+        if not self.current_video_path:
+            return
+        time_sec = round(time_sec)
+        self.last_thumb_time = time_sec
+        if time_sec in self.thumb_cache:
+            self.thumbnail_ready.emit(time_sec, self.thumb_cache[time_sec])
+            return
+
+        # Kill any in-flight ffmpeg immediately — no point finishing a stale frame
+        proc = self._current_proc
+        if proc is not None:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+        def extract():
+            if self.last_thumb_time != time_sec:
+                return
+            cmd = [
+                "ffmpeg", "-y",
+                "-probesize", "500000",      # 10× faster container probe (default is 5 MB)
+                "-analyzeduration", "0",     # skip stream analysis entirely
+                "-ss", str(time_sec),        # fast keyframe seek (before -i = demuxer seek)
+                "-i", self.current_video_path,
+                "-frames:v", "1",
+                "-vf", "scale=320:180:flags=lanczos",  # 2× render res, lanczos for sharpness
+                "-q:v", "2",                 # near-lossless JPEG (was 5, which is visibly blurry)
+                "-f", "image2pipe", "-vcodec", "mjpeg", "-"
+            ]
+            try:
+                kwargs = {}
+                if sys.platform == "win32":
+                    kwargs['creationflags'] = 0x08000000
+                p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, **kwargs)
+                self._current_proc = p
+                try:
+                    out, _ = p.communicate(timeout=4)
+                except subprocess.TimeoutExpired:
+                    p.kill()
+                    p.communicate()
+                    return
+                finally:
+                    if self._current_proc is p:
+                        self._current_proc = None
+                if out and self.last_thumb_time == time_sec:
+                    b64 = base64.b64encode(out).decode('utf-8')
+                    data_url = f"data:image/jpeg;base64,{b64}"
+                    self.thumb_cache[time_sec] = data_url
+                    self.thumbnail_ready.emit(time_sec, data_url)
+            except Exception:
+                pass
+
+        self.threadpool.submit(extract)
 
     @pyqtSlot(float)
     def requestThumbnail(self, time_sec):
@@ -354,6 +413,7 @@ class VideoPlayer(QMainWindow):
         self.is_closing      = False
         self._drag_start_pos     = None
         self._drag_start_win_pos = None
+        self._handling_maximize  = False   # ← add this
 
         self.setContentsMargins(0, 0, 0, 0)
         self.setStyleSheet("QMainWindow { background-color: black; border: none; margin: 0px; padding: 0px; }")
@@ -492,14 +552,13 @@ class VideoPlayer(QMainWindow):
     def changeEvent(self, event):
         if event.type() == QEvent.Type.WindowStateChange:
             if self.isMaximized() and not self._is_fullscreen:
-                # The OS maximized the window (e.g., via Win+Up or dragging to top edge).
-                # Since it's frameless, OS maximize covers the taskbar.
-                # We revert the OS maximize and apply our manual maximize instead.
-                self.showNormal()
-                if not self._is_maximized:
-                    self.toggleMaximize()
+                if not self._handling_maximize:
+                    self._handling_maximize = True
+                    self.showNormal()
+                    if not self._is_maximized:
+                        QTimer.singleShot(0, self.toggleMaximize)
+                    self._handling_maximize = False
             elif not self.isMaximized() and not self._is_fullscreen and not self.isMinimized():
-                # OS restored the window (e.g. Win+Down)
                 if self._is_maximized:
                     self._is_maximized = False
                     self._saved_geometry = self.geometry()
