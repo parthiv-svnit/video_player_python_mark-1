@@ -75,9 +75,18 @@
             position: absolute; inset: 0;
             display: flex; flex-direction: column;
             align-items: center; justify-content: center;
-            background: #121212;
+            background: #0a0a0f;
+            background-image:
+                radial-gradient(ellipse at 20% 50%, rgba(59,130,246,0.08) 0%, transparent 60%),
+                radial-gradient(ellipse at 80% 50%, rgba(139,92,246,0.06) 0%, transparent 60%),
+                radial-gradient(ellipse at 50% 100%, rgba(59,130,246,0.05) 0%, transparent 50%);
         }
         #local-file-section.hidden { display: none; }
+        @keyframes pulse-glow {
+            0%, 100% { filter: drop-shadow(0 0 8px rgba(59,130,246,0.3)); }
+            50%      { filter: drop-shadow(0 0 20px rgba(59,130,246,0.6)); }
+        }
+        .drop-icon-glow { animation: pulse-glow 2.5s ease-in-out infinite; }
 
         /* Video player section */
         #video-player-section {
@@ -145,12 +154,19 @@
             width: 100%; height: 5px;
             background: rgba(255,255,255,0.2); outline: none;
             transition: height 0.2s ease; cursor: pointer; border-radius: 4px;
+            overflow: visible;        /* allow thumb to reach the very end */
+            margin: 0; padding: 0;
         }
         .progress-bar:hover { height: 7px; }
+        .progress-bar::-webkit-slider-runnable-track {
+            width: 100%; height: inherit;
+            background: rgba(255,255,255,0.2); border-radius: 4px;
+        }
         .progress-bar::-webkit-slider-thumb {
             -webkit-appearance: none; appearance: none;
             width: 15px; height: 15px; background: #3b82f6;
             border-radius: 50%; cursor: pointer; box-shadow: 0 0 4px rgba(0,0,0,0.5);
+            margin-top: -5px;         /* vertically center thumb on track */
         }
 
         /* Floating panels */
@@ -182,13 +198,17 @@
         /* Tooltip */
         .progress-bar-wrapper { position: relative; }
         #progress-tooltip {
-            position: absolute; bottom: 20px;
-            background-color: rgba(20,20,20,0.9);
-            border: 1px solid rgba(255,255,255,0.2); color: white;
-            padding: 6px; border-radius: 8px; font-size: 13px;
+            position: absolute; bottom: 24px;
+            background: rgba(30, 30, 30, 0.35);
+            backdrop-filter: blur(24px) saturate(180%);
+            -webkit-backdrop-filter: blur(24px) saturate(180%);
+            border: 1px solid rgba(255,255,255,0.18); color: white;
+            padding: 8px; border-radius: 16px; font-size: 13px;
             pointer-events: none; transform: translateX(-50%);
-            display: none; box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+            display: none;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.45), inset 0 1px 0 rgba(255,255,255,0.15);
             flex-direction: column; align-items: center;
+            gap: 6px;
         }
 
         /* Notifications */
@@ -229,16 +249,15 @@
     <div id="content">
 
         <!-- Home screen -->
-        <div id="local-file-section" class="text-center p-8 w-full max-w-2xl" style="max-width:42rem; margin: 0 auto; position: absolute; top:50%; left:50%; transform:translate(-50%,-50%); width:100%;">
-            <h1 class="text-5xl font-bold text-white mb-4"><span class="text-blue-500">MX</span> Player</h1>
-            <p class="text-gray-400 mb-8 text-lg">Your Personal Video Player</p>
-            <button id="open-file-btn" class="bg-blue-600 text-white px-8 py-4 rounded-full font-semibold hover:bg-blue-700 transition text-xl shadow-lg shadow-blue-500/20">
-                <i class="fas fa-folder-open mr-3"></i> Open Video(s)
-            </button>
-            <div id="drop-zone" class="mt-8 border-2 border-dashed border-gray-600 rounded-2xl p-10 hover:border-blue-500 transition cursor-pointer bg-gray-800/30 hover:bg-gray-800/60">
-                <i class="fas fa-cloud-upload-alt text-5xl text-blue-500 mb-4"></i>
-                <p class="text-gray-300 text-lg font-medium">Drag &amp; Drop videos here</p>
-                <p class="text-gray-500 text-sm mt-2">or click anywhere inside this box to browse</p>
+        <div id="local-file-section" class="w-full h-full">
+            <div class="text-center p-8 w-full max-w-2xl mx-auto flex flex-col items-center justify-center h-full">
+                <h1 class="text-5xl font-bold text-white mb-6"><span class="text-blue-500">MX</span> Player</h1>
+                <p class="text-gray-400 mb-10 text-lg" style="letter-spacing:0.02em;">Your Personal Video Player</p>
+                <div id="drop-zone" class="w-full border-2 border-dashed border-gray-600/60 rounded-2xl p-12 hover:border-blue-500 transition-all duration-300 cursor-pointer bg-white/[0.03] hover:bg-white/[0.06]" style="backdrop-filter:blur(8px);">
+                    <i class="fas fa-cloud-upload-alt text-6xl text-blue-500 mb-5 drop-icon-glow" style="display:block;"></i>
+                    <p class="text-gray-200 text-lg font-semibold mb-1">Drag &amp; Drop videos here</p>
+                    <p class="text-gray-500 text-sm">or click to browse</p>
+                </div>
             </div>
         </div>
 
@@ -288,8 +307,8 @@
                 <div class="controls-bar bottom-controls bottom-controls-gradient w-full absolute bottom-0 left-0 p-4 z-20">
                     <div class="w-full mb-3 progress-bar-wrapper">
                         <div id="progress-tooltip" class="flex flex-col items-center">
-                            <img id="thumb-img" class="rounded bg-black mb-1.5 hidden shadow-md object-cover" width="160" height="90" style="min-width:160px;min-height:90px;">
-                            <span id="tooltip-time" class="font-mono font-medium">00:00</span>
+                            <img id="thumb-img" class="hidden object-cover" width="160" height="90" style="min-width:160px;min-height:90px;border-radius:10px;box-shadow:0 2px 12px rgba(0,0,0,0.6);border:1px solid rgba(255,255,255,0.1);">
+                            <span id="tooltip-time" class="font-mono font-semibold" style="text-shadow:0 1px 4px rgba(0,0,0,0.9);letter-spacing:0.06em;font-size:12px;color:rgba(255,255,255,0.92);"></span>
                         </div>
                         <div class="flex justify-between items-center text-xs font-mono text-white px-1 mb-1" style="text-shadow:0px 1px 2px rgba(0,0,0,0.8);">
                             <span id="current-time">00:00</span>
@@ -355,6 +374,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let isFullscreen      = false;
     let isMaximized       = false;
     let showRemainingTime = false;
+    let videoHasEnded     = false;
     let currentHoverPercent = 0;
     let inactivityTimer, trackNotifTimer, volumeNotifTimer, panelHideTimer;
 
@@ -380,7 +400,7 @@ document.addEventListener('DOMContentLoaded', () => {
         totalTimeDisplay:   document.getElementById('total-time'),
         fullscreenBtn:      document.getElementById('fullscreen-btn'),
         backBtn:            document.getElementById('back-btn'),
-        openFileBtn:        document.getElementById('open-file-btn'),
+
         nextBtn:            document.getElementById('next-btn'),
         prevBtn:            document.getElementById('prev-btn'),
         lockBtn:            document.getElementById('lock-btn'),
@@ -435,9 +455,13 @@ document.addEventListener('DOMContentLoaded', () => {
         volumeNotifTimer = setTimeout(() => el.volumeNotification.style.opacity = '0', 1500);
     };
 
-    const hideControls = () => el.videoContainer.classList.add('inactive');
+    const hideControls = () => {
+        el.videoContainer.classList.add('inactive');
+        document.body.style.cursor = 'none';
+    };
     const resetInactivityTimer = () => {
         el.videoContainer.classList.remove('inactive');
+        document.body.style.cursor = '';
         clearTimeout(inactivityTimer);
         inactivityTimer = setTimeout(hideControls, 1500);
     };
@@ -565,7 +589,7 @@ document.addEventListener('DOMContentLoaded', () => {
         el.playPauseBtn.innerHTML = isPlaying
             ? '<i class="fas fa-pause-circle"></i>'
             : '<i class="fas fa-play-circle"></i>';
-        if (isPlaying) resetInactivityTimer();
+        if (isPlaying) { videoHasEnded = false; resetInactivityTimer(); }
         else { clearTimeout(inactivityTimer); el.videoContainer.classList.remove('inactive'); }
     };
 
@@ -587,7 +611,15 @@ document.addEventListener('DOMContentLoaded', () => {
         backend.time_updated.connect(onTimeUpdated);
         backend.state_changed.connect(onStateChanged);
         backend.tracks_populated.connect(buildTrackUI);
-        backend.video_ended.connect(() => playFileFromPlaylist(currentVideoIndex + 1));
+        backend.video_ended.connect(() => {
+            el.progressBar.value = 100;
+            if (totalDurationMs > 0) el.currentTimeDisplay.textContent = formatTime(totalDurationMs);
+            if (currentVideoIndex < playlist.length - 1) {
+                playFileFromPlaylist(currentVideoIndex + 1);
+            } else {
+                videoHasEnded = true;   // flag so space can restart
+            }
+        });
 
         backend.thumbnail_ready.connect((timeSec, b64Url) => {
             const hoverSec = totalDurationMs * currentHoverPercent / 1000;
@@ -604,15 +636,18 @@ document.addEventListener('DOMContentLoaded', () => {
             showTrackNotification('Custom subtitle loaded');
         });
 
-        el.openFileBtn.onclick        = () => backend.openFileDialog();
         el.dropZone.onclick           = () => backend.openFileDialog();
-        el.playPauseBtn.onclick       = () => backend.togglePlay();
+        el.playPauseBtn.onclick       = () => {
+            if (videoHasEnded) { playFileFromPlaylist(currentVideoIndex); videoHasEnded = false; }
+            else backend.togglePlay();
+        };
         el.progressBar.oninput        = (e) => backend.seek(parseFloat(e.target.value) / 100.0);
         el.customSubtitleBtn.onclick  = () => backend.openSubtitleDialog();
 
         el.fullscreenBtn.onclick = () => {
             backend.toggleFullscreen();
             setFullscreenUI(!isFullscreen);
+            resetInactivityTimer();   // add this
         };
     });
 
@@ -758,6 +793,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!backend) return;
         backend.toggleFullscreen();
         setFullscreenUI(!isFullscreen);
+        resetInactivityTimer();   // add this
     });
 
     // ── Drag & drop feedback (visual only — actual drop handled by Python) ────
@@ -772,14 +808,25 @@ document.addEventListener('DOMContentLoaded', () => {
         if (e.target.tagName === 'INPUT' && e.target.type !== 'range') return;
         if (!backend) return;
 
+        // Meta/Windows key shortcuts
+        if (e.metaKey) {
+            if (e.key === 'ArrowUp') { backend.maximizeWindow(); e.preventDefault(); return; }
+            if (e.key === 'ArrowDown') { backend.minimizeWindow(); e.preventDefault(); return; }
+        }
+
         if ([' ','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.key)) e.preventDefault();
 
         switch (e.key.toLowerCase()) {
             case 'f':
                 backend.toggleFullscreen();
                 setFullscreenUI(!isFullscreen);
+                resetInactivityTimer();   // add this
                 break;
-            case ' ':  case 'k': backend.togglePlay(); break;
+            case ' ':
+            case 'k':
+                if (videoHasEnded) { playFileFromPlaylist(currentVideoIndex); videoHasEnded = false; }
+                else backend.togglePlay();
+                break;
             case 'arrowright':   seekRelative(5000);   break;
             case 'arrowleft':    seekRelative(-5000);  break;
             case 'arrowup':      backend.changeVolume(0.05).then(showVolumeNotification);  break;

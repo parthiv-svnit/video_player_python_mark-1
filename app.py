@@ -1,14 +1,17 @@
 import sys
 import os
+import json
 import vlc
 import subprocess
 import base64
 import concurrent.futures
+from pathlib import Path
 from PyQt6.QtWidgets import QApplication, QMainWindow, QWidget, QFileDialog, QVBoxLayout
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebEngineCore import QWebEngineSettings
 from PyQt6.QtWebChannel import QWebChannel
 from PyQt6.QtCore import Qt, QUrl, QObject, pyqtSlot, pyqtSignal, QTimer, QFile, QIODevice, QEvent
+from PyQt6.QtGui import QShortcut, QKeySequence
 
 def ensure_qwebchannel():
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -20,13 +23,27 @@ def ensure_qwebchannel():
                 f.write(qfile.readAll().data())
             qfile.close()
 
-class DropFilter(QObject):
+class OverlayEventFilter(QObject):
     def __init__(self, backend):
         super().__init__()
         self.backend = backend
 
     def eventFilter(self, obj, event):
-        if event.type() == QEvent.Type.DragEnter:
+        if event.type() == QEvent.Type.KeyPress:
+            if event.modifiers() == Qt.KeyboardModifier.MetaModifier:
+                if event.key() == Qt.Key.Key_Up:
+                    if hasattr(self.backend, 'player'):
+                        if not self.backend.player._is_maximized:
+                            self.backend.player.toggleMaximize()
+                    return True
+                elif event.key() == Qt.Key.Key_Down:
+                    if hasattr(self.backend, 'player'):
+                        if self.backend.player._is_maximized:
+                            self.backend.player.toggleMaximize()
+                        else:
+                            self.backend.player.showMinimized()
+                    return True
+        elif event.type() == QEvent.Type.DragEnter:
             if event.mimeData().hasUrls():
                 event.accept()
                 return True
@@ -56,6 +73,8 @@ class VideoBackend(QObject):
         self.threadpool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         self.thumb_cache = {}
         self.last_thumb_time = -1
+        self._custom_subs = []   # [{"name": str, "path": str}]
+        self._custom_sub_id_base = 90000
 
     @pyqtSlot()
     def openFileDialog(self):
@@ -73,23 +92,59 @@ class VideoBackend(QObject):
             "Subtitles (*.srt *.vtt *.ass *.ssa *.sub);;All (*)"
         )
         if filename:
-            self.player.media_player.video_set_subtitle_file(filename)
-            # Give VLC a moment to register the track, then signal JS to rebuild subtitle UI
-            QTimer.singleShot(500, self._emit_subtitle_added)
+            basename = os.path.basename(filename)
+            # Avoid adding the same file twice
+            if not any(s['path'] == filename for s in self._custom_subs):
+                self._custom_subs.append({"name": basename, "path": filename})
 
-    def _emit_subtitle_added(self):
-        # Re-read spu descriptions and tell JS; JS will rebuild only the subtitle list
-        subs = [{"id": t[0], "name": t[1].decode('utf-8')}
-                for t in self.player.media_player.video_get_spu_description()
-                if t[0] != -1]
-        curr_sub = self.player.media_player.video_get_spu()
-        import json
-        self.subtitle_added.emit(json.dumps({"subs": subs, "current": curr_sub}))
+            # Apply the subtitle to VLC using the most reliable methods
+            self._apply_subtitle_to_vlc(filename)
+
+            # Determine the custom ID for the newly-selected subtitle
+            idx = next(i for i, s in enumerate(self._custom_subs) if s['path'] == filename)
+            selected_id = self._custom_sub_id_base + idx
+
+            # Give VLC a moment, then emit updated list to JS
+            QTimer.singleShot(300, lambda sid=selected_id: self._emit_subtitle_list(sid))
+
+    def _apply_subtitle_to_vlc(self, filepath):
+        """Apply a subtitle file to VLC using multiple methods for reliability."""
+        uri = Path(filepath).as_uri()   # file:///C:/path/to/sub.srt
+        # Method 1: add_slave (VLC 3.0+, most reliable, auto-selects)
+        try:
+            self.player.media_player.add_slave(0, uri, True)  # 0 = subtitle
+        except Exception:
+            pass
+        # Method 2: video_set_subtitle_file (legacy fallback) — needs RAW path, not URI
+        try:
+            self.player.media_player.video_set_subtitle_file(filepath)
+        except Exception:
+            pass
+
+    def _emit_subtitle_list(self, selected_custom_id):
+        """Emit merged subtitle list (VLC built-in tracks + our custom tracks) to JS."""
+        # Get VLC's built-in subtitle tracks
+        vlc_subs = []
+        try:
+            vlc_subs = [{"id": t[0], "name": t[1].decode('utf-8')}
+                        for t in self.player.media_player.video_get_spu_description()
+                        if t[0] != -1]
+        except Exception:
+            pass
+
+        # Build merged list: VLC tracks + custom tracks (always appended)
+        merged = list(vlc_subs)
+        for i, cs in enumerate(self._custom_subs):
+            custom_id = self._custom_sub_id_base + i
+            merged.append({"id": custom_id, "name": cs['name']})
+
+        self.subtitle_added.emit(json.dumps({"subs": merged, "current": selected_custom_id}))
 
     @pyqtSlot(str)
     def playFile(self, path):
         self.current_video_path = path
         self.thumb_cache.clear()
+        self._custom_subs.clear()   # reset custom subs for new video
         media = self.player.instance.media_new(path)
         self.player.media_player.set_media(media)
         self.player.media_player.play()
@@ -98,6 +153,14 @@ class VideoBackend(QObject):
 
     @pyqtSlot()
     def togglePlay(self):
+        state = self.player.media_player.get_state()
+        if state == vlc.State.Ended:
+            # If the video ended, spacebar/play should restart it
+            self.player.media_player.stop()
+            self.player.media_player.play()
+            self.state_changed.emit(True)
+            return
+
         if self.player.media_player.is_playing():
             self.player.media_player.pause()
             self.state_changed.emit(False)
@@ -138,7 +201,7 @@ class VideoBackend(QObject):
 
     @pyqtSlot(result=bool)
     def toggleMute(self):
-        is_muted = self.player.media_player.audio_get_mute()
+        is_muted = self.player.media_player.audio_get_mute() == 1
         self.player.media_player.audio_set_mute(not is_muted)
         return not is_muted
 
@@ -157,7 +220,16 @@ class VideoBackend(QObject):
 
     @pyqtSlot(int)
     def setSubtitleTrack(self, track_id):
-        self.player.media_player.video_set_spu(track_id)
+        if track_id >= self._custom_sub_id_base:
+            # Custom subtitle — re-apply the file to VLC
+            idx = track_id - self._custom_sub_id_base
+            if 0 <= idx < len(self._custom_subs):
+                self._apply_subtitle_to_vlc(self._custom_subs[idx]['path'])
+        elif track_id == -1:
+            # "Off" — disable subtitles
+            self.player.media_player.video_set_spu(-1)
+        else:
+            self.player.media_player.video_set_spu(track_id)
 
     @pyqtSlot(float)
     def setRate(self, rate):
@@ -244,11 +316,18 @@ class UIOverlay(QWidget):
         self.web_view.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.web_view.setAcceptDrops(True)
 
-        self.drop_filter = DropFilter(backend)
+        self.drop_filter = OverlayEventFilter(backend)
         self.web_view.installEventFilter(self.drop_filter)
         if self.web_view.focusProxy():
             self.web_view.focusProxy().installEventFilter(self.drop_filter)
             self.web_view.focusProxy().setAcceptDrops(True)
+        self.web_view.loadFinished.connect(self._reinstall_filter)
+
+    def _reinstall_filter(self):
+        proxy = self.web_view.focusProxy()
+        if proxy:
+            proxy.installEventFilter(self.drop_filter)
+            proxy.setAcceptDrops(True)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -281,6 +360,13 @@ class VideoPlayer(QMainWindow):
         self.setStatusBar(None)
         self.setMenuBar(None)
 
+        # ── Global Keyboard Shortcuts for Win+Up / Win+Down ──
+        self.shortcut_up = QShortcut(QKeySequence("Meta+Up"), self)
+        self.shortcut_up.activated.connect(self._handle_meta_up)
+
+        self.shortcut_down = QShortcut(QKeySequence("Meta+Down"), self)
+        self.shortcut_down.activated.connect(self._handle_meta_down)
+
         self.TITLE_BAR_HEIGHT = 36
 
         container = QWidget()
@@ -298,7 +384,21 @@ class VideoPlayer(QMainWindow):
         self._container_layout = layout
         self.setCentralWidget(container)
 
-        self.instance = vlc.Instance("--no-xlib --drop-late-frames")
+        self.instance = vlc.Instance(
+            "--no-xlib",
+            "--drop-late-frames",
+            "--no-keyboard-events",
+            "--no-mouse-events",
+            # ── Subtitle font styling (matches classic TV/movie look) ──
+            "--freetype-font=Arial",
+            "--freetype-rel-fontsize=18",       # proportional to video height
+            "--freetype-color=16777215",         # white (0xFFFFFF)
+            "--freetype-outline-thickness=4",    # clean black outline stroke
+            "--freetype-outline-color=0",        # black outline
+            "--freetype-shadow-opacity=180",     # subtle shadow for depth
+            "--freetype-shadow-color=0",         # black shadow
+            "--freetype-background-opacity=0",   # no background box
+        )
         self.media_player = self.instance.media_player_new()
         self.tracks_pushed = False
         self.last_state    = None
@@ -367,6 +467,18 @@ class VideoPlayer(QMainWindow):
         dy = screen_y - self._drag_start_pos[1]
         self.move(self._drag_start_win_pos[0] + dx, self._drag_start_win_pos[1] + dy)
 
+    # ── Custom Shortcut Handlers ────────────────────────────────────────────
+
+    def _handle_meta_up(self):
+        if not self._is_maximized:
+            self.toggleMaximize()
+
+    def _handle_meta_down(self):
+        if self._is_maximized:
+            self.toggleMaximize()
+        else:
+            self.showMinimized()
+
     # ── Overlay sync ────────────────────────────────────────────────────────
 
     def sync_overlay(self):
@@ -377,7 +489,39 @@ class VideoPlayer(QMainWindow):
 
     # ── Qt event overrides ──────────────────────────────────────────────────
 
+    def changeEvent(self, event):
+        if event.type() == QEvent.Type.WindowStateChange:
+            if self.isMaximized() and not self._is_fullscreen:
+                # The OS maximized the window (e.g., via Win+Up or dragging to top edge).
+                # Since it's frameless, OS maximize covers the taskbar.
+                # We revert the OS maximize and apply our manual maximize instead.
+                self.showNormal()
+                if not self._is_maximized:
+                    self.toggleMaximize()
+            elif not self.isMaximized() and not self._is_fullscreen and not self.isMinimized():
+                # OS restored the window (e.g. Win+Down)
+                if self._is_maximized:
+                    self._is_maximized = False
+                    self._saved_geometry = self.geometry()
+                    if hasattr(self, 'overlay') and self.overlay.isVisible():
+                        self.overlay.web_view.page().runJavaScript("isMaximized = false; updateMaxIcon();")
+                    QTimer.singleShot(0, self.sync_overlay)
+        super().changeEvent(event)
+
     def keyPressEvent(self, event):
+        # Explicitly handle Win+Up and Win+Down since FramelessWindowHint disables OS snap
+        if event.modifiers() == Qt.KeyboardModifier.MetaModifier:
+            if event.key() == Qt.Key.Key_Up:
+                if not self._is_maximized:
+                    self.toggleMaximize()
+                return
+            elif event.key() == Qt.Key.Key_Down:
+                if self._is_maximized:
+                    self.toggleMaximize()
+                else:
+                    self.showMinimized()
+                return
+
         if hasattr(self, 'overlay') and self.overlay.isVisible():
             QApplication.sendEvent(self.overlay.web_view.focusProxy(), event)
         super().keyPressEvent(event)
